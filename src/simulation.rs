@@ -3,36 +3,53 @@ use rayon::prelude::*;
 use crate::particle::Particle;
 use crate::grid::Grid;
 use crate::mesh::Mesh;
+use crate::material::Material;
+use crate::contact::Contact;
+use crate::gpu;
+use dashmap::DashMap;
 
 pub struct Simulation {
     pub particles: Vec<Particle>,
-    pub meshes: Vec<Mesh>,
     pub grid: Grid,
     pub dt: f32,
     pub bounds_min: Vec3,
     pub bounds_max: Vec3,
-    pub gravity: Vec3,
-    pub kn: f32, // Normal stiffness
-    pub gn: f32, // Normal damping
+    pub meshes: Vec<Mesh>,
+    pub contacts: DashMap<(usize, usize), Contact>,
+    pub material: Material, // Global material for now, or per particle?
+    // User asked for "specify the young's modulus and density of walls and particles seperately"
+    // So we need materials for particles and walls.
+    // Let's assume all particles share a material, and walls share a material for now.
+    pub particle_material: Material,
+    pub wall_material: Material,
+    pub periodic: [bool; 3],
+    pub gpu_sim: Option<gpu::GpuSimulation>,
 }
 
 impl Simulation {
     pub fn new(dt: f32, bounds_min: Vec3, bounds_max: Vec3, particle_count: usize) -> Self {
-        let particles = Vec::with_capacity(particle_count);
+        let mut particles = Vec::with_capacity(particle_count);
         // Heuristic for cell size: 2 * max_radius. Let's assume max_radius = 0.1 for now.
-        let cell_size = 0.2; 
-        let grid = Grid::new(cell_size, bounds_min, bounds_max);
+        // Heuristic for cell size: 2 * max_radius. Let's assume max_radius = 0.1 for now.
+        let grid = Grid::new(1.0, bounds_min, bounds_max); // Cell size will be updated
+        
+        // Default materials
+        let particle_material = Material::new(1e7, 0.3, 2500.0, 0.5, 0.5);
+        let wall_material = Material::new(1e9, 0.3, 7800.0, 0.5, 0.5);
 
         Self {
             particles,
-            meshes: Vec::new(),
             grid,
             dt,
             bounds_min,
             bounds_max,
-            gravity: Vec3::new(0.0, -9.81, 0.0),
-            kn: 1e4, // Adjusted stiffness
-            gn: 10.0,
+            meshes: Vec::new(),
+            contacts: DashMap::new(),
+            material: particle_material, // Deprecated
+            particle_material,
+            wall_material,
+            periodic: [false; 3],
+            gpu_sim: None,
         }
     }
 
@@ -45,19 +62,81 @@ impl Simulation {
         self.meshes.push(mesh);
     }
 
+    pub fn enable_gpu(&mut self) {
+        // Initialize GPU simulation
+        // This requires async, but we are in sync context.
+        // We use pollster to block.
+        let gpu_sim = pollster::block_on(gpu::GpuSimulation::new(
+            &self.particles,
+            self.dt,
+            self.bounds_min,
+            self.bounds_max,
+            self.periodic,
+            self.particle_material,
+            self.wall_material,
+        ));
+        self.gpu_sim = Some(gpu_sim);
+    }
+
     pub fn step(&mut self) {
+        if let Some(gpu_sim) = &mut self.gpu_sim {
+            gpu_sim.step();
+            // Sync back particles for VTK or other logic?
+            // Doing it every step is slow.
+            // But Simulation struct owns particles.
+            // If we want to write VTK, we need to sync.
+            // For now, let's NOT sync every step, only when needed (e.g. before write_vtk).
+            // But step() updates self.particles in CPU mode.
+            // If we switch modes, we need to sync.
+            // Let's assume if GPU is enabled, we run on GPU.
+            // We should add a sync_from_gpu() method.
+        } else {
+            self.step_cpu();
+        }
+    }
+
+    fn step_cpu(&mut self) {
         let dt = self.dt;
 
-        // 0. Remove out of bounds particles
+        // 0. Handle boundaries (Wrap or Remove)
         let bounds_min = self.bounds_min;
         let bounds_max = self.bounds_max;
-        self.particles.retain(|p| {
-            p.position.y >= bounds_min.y - 1.0 && // Allow falling a bit below
-            p.position.x >= bounds_min.x - 1.0 &&
-            p.position.x <= bounds_max.x + 1.0 &&
-            p.position.z >= bounds_min.z - 1.0 &&
-            p.position.z <= bounds_max.z + 1.0
-        });
+        let bounds_size = bounds_max - bounds_min;
+        let periodic = self.periodic;
+        
+        if periodic[0] || periodic[1] || periodic[2] {
+            // Wrap particles
+            self.particles.par_iter_mut().for_each(|p| {
+                if periodic[0] {
+                    if p.position.x < bounds_min.x { p.position.x += bounds_size.x; }
+                    else if p.position.x >= bounds_max.x { p.position.x -= bounds_size.x; }
+                }
+                if periodic[1] {
+                    if p.position.y < bounds_min.y { p.position.y += bounds_size.y; }
+                    else if p.position.y >= bounds_max.y { p.position.y -= bounds_size.y; }
+                }
+                if periodic[2] {
+                    if p.position.z < bounds_min.z { p.position.z += bounds_size.z; }
+                    else if p.position.z >= bounds_max.z { p.position.z -= bounds_size.z; }
+                }
+            });
+            
+            // Remove out of bounds for non-periodic dimensions
+             self.particles.retain(|p| {
+                (periodic[0] || (p.position.x >= bounds_min.x - 1.0 && p.position.x <= bounds_max.x + 1.0)) &&
+                (periodic[1] || (p.position.y >= bounds_min.y - 1.0)) && // Allow falling a bit below if not periodic y
+                (periodic[2] || (p.position.z >= bounds_min.z - 1.0 && p.position.z <= bounds_max.z + 1.0))
+            });
+        } else {
+             // Original removal logic
+            self.particles.retain(|p| {
+                p.position.y >= bounds_min.y - 1.0 &&
+                p.position.x >= bounds_min.x - 1.0 &&
+                p.position.x <= bounds_max.x + 1.0 &&
+                p.position.z >= bounds_min.z - 1.0 &&
+                p.position.z <= bounds_max.z + 1.0
+            });
+        }
         
         // Re-index
         for (i, p) in self.particles.iter_mut().enumerate() {
@@ -67,129 +146,149 @@ impl Simulation {
         // 1. First Half Update (Velocity Verlet)
         // v(t + 0.5dt) = v(t) + 0.5 * a(t) * dt
         // x(t + dt) = x(t) + v(t + 0.5dt) * dt
-        for p in &mut self.particles {
+        self.particles.par_iter_mut().for_each(|p| {
             p.velocity += 0.5 * p.acceleration * dt;
             p.position += p.velocity * dt;
-        }
+        });
 
-        // 2. Update Grid
+        // 2. Force Calculation
+        // Reset forces (gravity)
+        let g = Vec3::new(0.0, -9.81, 0.0);
+        self.particles.par_iter_mut().for_each(|p| {
+            p.acceleration = g;
+        });
+
+        // Broad-phase
         self.grid.clear();
         for p in &self.particles {
             self.grid.insert(p);
         }
 
-        // 3. Calculate Forces (at new positions)
-        // We calculate the net force for each particle.
-        // Since we can't easily mutate particles in parallel while reading them,
-        // we compute the forces into a separate vector.
-        let particles_ref = &self.particles;
-        let grid_ref = &self.grid;
-        let gravity = self.gravity;
-        let bounds_min = self.bounds_min;
-        let bounds_max = self.bounds_max;
-        let kn = self.kn;
-        let gn = self.gn;
-        let meshes_ref = &self.meshes;
-
-        let new_accelerations: Vec<Vec3> = particles_ref.par_iter().map(|p| {
-            let mut force = gravity * p.mass;
-
-            // Mesh Collisions
-            for mesh in meshes_ref {
-                for triangle in &mesh.triangles {
-                    if let Some((penetration, normal)) = triangle.intersect_sphere(p.position, p.radius) {
-                        let rel_vel = -p.velocity; // Mesh is stationary
-                        let normal_vel = rel_vel.dot(normal);
-                        // Repulsive force
-                        let f_spring = kn * penetration * normal;
-                        let f_dash = gn * normal_vel * normal;
-                        force += f_spring + f_dash;
-                    }
+        // Narrow-phase & Solve
+        let p_mat = self.particle_material;
+        let w_mat = self.wall_material;
+        
+        use rayon::prelude::*;
+        use crate::physics::*;
+        use crate::material::*;
+        
+        let grid = &self.grid;
+        let particles = &self.particles;
+        let contacts = &self.contacts;
+        let meshes = &self.meshes;
+        
+        let forces: Vec<Vec3> = self.particles.par_iter().enumerate().map(|(i, p)| {
+            let mut f_total = Vec3::ZERO;
+            
+            // Neighbor search
+            let neighbors = grid.get_potential_collisions(p, periodic);
+            for &j in &neighbors {
+                if i == j { continue; }
+                let other = &particles[j];
+                
+                let mut dist_vec = p.position - other.position;
+                
+                // Minimum Image Convention
+                if periodic[0] {
+                    if dist_vec.x > bounds_size.x * 0.5 { dist_vec.x -= bounds_size.x; }
+                    else if dist_vec.x < -bounds_size.x * 0.5 { dist_vec.x += bounds_size.x; }
                 }
-            }
-
-            // Wall collisions
-            // Floor (Y-)
-            if p.position.y - p.radius < bounds_min.y {
-                let penetration = bounds_min.y - (p.position.y - p.radius);
-                let normal = Vec3::Y;
-                let rel_vel = -p.velocity; 
-                let normal_vel = rel_vel.dot(normal);
-                let f_spring = kn * penetration * normal; 
-                let f_dash = gn * normal_vel * normal;
-                force += f_spring + f_dash;
-            }
-            // Walls (X-, X+, Z-, Z+)
-            // X-
-            if p.position.x - p.radius < bounds_min.x {
-                let penetration = bounds_min.x - (p.position.x - p.radius);
-                let normal = Vec3::X;
-                let rel_vel = -p.velocity;
-                let normal_vel = rel_vel.dot(normal);
-                force += (kn * penetration + gn * normal_vel) * normal;
-            }
-            // X+
-            if p.position.x + p.radius > bounds_max.x {
-                let penetration = (p.position.x + p.radius) - bounds_max.x;
-                let normal = -Vec3::X;
-                let rel_vel = -p.velocity;
-                let normal_vel = rel_vel.dot(normal);
-                force += (kn * penetration + gn * normal_vel) * normal;
-            }
-            // Z-
-            if p.position.z - p.radius < bounds_min.z {
-                let penetration = bounds_min.z - (p.position.z - p.radius);
-                let normal = Vec3::Z;
-                let rel_vel = -p.velocity;
-                let normal_vel = rel_vel.dot(normal);
-                force += (kn * penetration + gn * normal_vel) * normal;
-            }
-            // Z+
-            if p.position.z + p.radius > bounds_max.z {
-                let penetration = (p.position.z + p.radius) - bounds_max.z;
-                let normal = -Vec3::Z;
-                let rel_vel = -p.velocity;
-                let normal_vel = rel_vel.dot(normal);
-                force += (kn * penetration + gn * normal_vel) * normal;
-            }
-
-            // Particle-Particle collisions
-            let neighbors = grid_ref.get_potential_collisions(p);
-            for &other_idx in &neighbors {
-                if p.id == other_idx { continue; }
-                let other = &particles_ref[other_idx];
+                if periodic[1] {
+                    if dist_vec.y > bounds_size.y * 0.5 { dist_vec.y -= bounds_size.y; }
+                    else if dist_vec.y < -bounds_size.y * 0.5 { dist_vec.y += bounds_size.y; }
+                }
+                if periodic[2] {
+                    if dist_vec.z > bounds_size.z * 0.5 { dist_vec.z -= bounds_size.z; }
+                    else if dist_vec.z < -bounds_size.z * 0.5 { dist_vec.z += bounds_size.z; }
+                }
                 
-                let delta = p.position - other.position;
-                let dist_sq = delta.length_squared();
-                let rad_sum = p.radius + other.radius;
+                let dist_sq = dist_vec.length_squared();
+                let r_sum = p.radius + other.radius;
                 
-                if dist_sq < rad_sum * rad_sum && dist_sq > 0.00001 {
+                if dist_sq < r_sum * r_sum {
                     let dist = dist_sq.sqrt();
-                    let normal = delta / dist;
-                    let penetration = rad_sum - dist; 
-                    
+                    let overlap = r_sum - dist;
+                    let normal = if dist > 1e-6 { dist_vec / dist } else { Vec3::Y };
                     let rel_vel = p.velocity - other.velocity;
-                    let normal_vel = rel_vel.dot(normal);
                     
-                    // Force on p
-                    // F = kn * penetration - gn * normal_vel
-                    // Note: relative velocity is p - other. If moving towards each other, rel_vel dot normal is negative.
-                    // Damping should oppose motion.
-                    let f_spring = kn * penetration * normal;
-                    let f_dash = -gn * normal_vel * normal;
+                    // Material properties
+                    let r_star = effective_radius(p.radius, other.radius);
+                    let m_star = effective_mass(p.mass, other.mass);
+                    let e_star = effective_youngs_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio, p_mat.youngs_modulus, p_mat.poissons_ratio);
+                    let g_star = effective_shear_modulus(shear_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio), shear_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio));
                     
-                    force += f_spring + f_dash;
+                    // Contact state
+                    // Key must be sorted to be unique for pair
+                    let key = if i < j { (i, j) } else { (j, i) };
+                    // We need to access DashMap.
+                    // Since we are in a read-only pass over particles (conceptually), we can write to DashMap.
+                    // But we are inside a par_iter map.
+                    
+                    // Note: DashMap might deadlock if we try to upgrade/downgrade?
+                    // entry() is safe.
+                    
+                    let mut contact = contacts.entry(key).or_insert(Contact::new());
+                    contact.age += 1;
+                    
+                    // Normal Force (Hertzian)
+                    let f_normal = hertzian_contact(overlap, normal, rel_vel, e_star, r_star, m_star, p_mat.restitution_coefficient);
+                    let fn_mag = f_normal.length();
+                    
+                    // Tangential Force (Mindlin)
+                    let f_tangent = mindlin_contact(fn_mag, overlap, rel_vel, normal, &mut contact, g_star, r_star, p_mat.friction_coefficient, dt);
+                    
+                    f_total += f_normal + f_tangent;
                 }
             }
             
-            force / p.mass // Return acceleration
+            // Particle-Mesh (Walls)
+            // If periodic, we might skip wall collisions on periodic boundaries?
+            // Usually periodic implies no walls on those sides.
+            // But we might have internal meshes.
+            // Let's assume meshes are internal or user handles placement.
+            // However, explicit wall checks (like floor) need to be conditional.
+            
+            for mesh in meshes {
+                for triangle in &mesh.triangles {
+                    if let Some((penetration, normal)) = triangle.intersect_sphere(p.position, p.radius) {
+                        let rel_vel = p.velocity; // Wall is static
+                        
+                        // Wall material
+                        let r_star = p.radius; // Wall radius is infinite
+                        let m_star = p.mass; // Wall mass infinite
+                        let e_star = effective_youngs_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio, w_mat.youngs_modulus, w_mat.poissons_ratio);
+                        let g_star = effective_shear_modulus(shear_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio), shear_modulus(w_mat.youngs_modulus, w_mat.poissons_ratio));
+                        
+                        // Hertzian normal force
+                        let f_normal = hertzian_contact(penetration, normal, rel_vel, e_star, r_star, m_star, p_mat.restitution_coefficient);
+                        
+                        // Simple Coulomb for wall
+                        let fn_mag = f_normal.length();
+                        let f_tangent = coulomb_friction(fn_mag, rel_vel, normal, p_mat.friction_coefficient);
+                        
+                        f_total += f_normal + f_tangent;
+                    }
+                }
+            }
+            
+            f_total
         }).collect();
+        
+        // Apply forces
+        self.particles.par_iter_mut().zip(forces.par_iter()).for_each(|(p, f)| {
+            p.acceleration += *f / p.mass;
+        });
 
-        // 4. Second Half Update (Velocity Verlet)
+        // 3. Second Half Update (Velocity Verlet)
         // v(t + dt) = v(t + 0.5dt) + 0.5 * a(t + dt) * dt
-        for (p, a_new) in self.particles.iter_mut().zip(new_accelerations.into_iter()) {
-            p.acceleration = a_new;
+        self.particles.par_iter_mut().for_each(|p| {
             p.velocity += 0.5 * p.acceleration * dt;
+        });
+    }
+
+    pub fn sync_particles(&mut self) {
+        if let Some(gpu_sim) = &self.gpu_sim {
+            self.particles = gpu_sim.read_particles();
         }
     }
 }

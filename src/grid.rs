@@ -45,7 +45,7 @@ impl Grid {
         }
     }
 
-    pub fn get_potential_collisions(&self, particle: &Particle) -> Vec<usize> {
+    pub fn get_potential_collisions(&self, particle: &Particle, periodic: [bool; 3]) -> Vec<usize> {
         let mut neighbors = Vec::new();
         let relative_pos = particle.position - self.grid_origin;
         let center_coords = (relative_pos / self.cell_size).floor().as_ivec3();
@@ -54,7 +54,21 @@ impl Grid {
         for z in -1..=1 {
             for y in -1..=1 {
                 for x in -1..=1 {
-                    let neighbor_coords = center_coords + IVec3::new(x, y, z);
+                    let mut neighbor_coords = center_coords + IVec3::new(x, y, z);
+                    
+                    // Handle periodicity
+                    if periodic[0] {
+                        if neighbor_coords.x < 0 { neighbor_coords.x += self.grid_dims.x; }
+                        else if neighbor_coords.x >= self.grid_dims.x { neighbor_coords.x -= self.grid_dims.x; }
+                    }
+                    if periodic[1] {
+                        if neighbor_coords.y < 0 { neighbor_coords.y += self.grid_dims.y; }
+                        else if neighbor_coords.y >= self.grid_dims.y { neighbor_coords.y -= self.grid_dims.y; }
+                    }
+                    if periodic[2] {
+                        if neighbor_coords.z < 0 { neighbor_coords.z += self.grid_dims.z; }
+                        else if neighbor_coords.z >= self.grid_dims.z { neighbor_coords.z -= self.grid_dims.z; }
+                    }
                     
                     if neighbor_coords.x >= 0 && neighbor_coords.x < self.grid_dims.x &&
                        neighbor_coords.y >= 0 && neighbor_coords.y < self.grid_dims.y &&

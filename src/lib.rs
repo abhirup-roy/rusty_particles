@@ -3,6 +3,10 @@ pub mod grid;
 pub mod simulation;
 pub mod vtk;
 pub mod mesh;
+pub mod material;
+pub mod contact;
+pub mod physics;
+pub mod gpu;
 
 use pyo3::prelude::*;
 use glam::Vec3;
@@ -53,7 +57,53 @@ impl PySimulation {
         self.inner.step();
     }
 
-    fn write_vtk(&self, filename: String) -> PyResult<()> {
+    fn set_particle_material(&mut self, youngs_modulus: f32, poissons_ratio: f32, density: f32, friction_coefficient: f32, restitution_coefficient: f32) {
+        self.inner.particle_material = material::Material::new(youngs_modulus, poissons_ratio, density, friction_coefficient, restitution_coefficient);
+        // Also update existing particles? 
+        // For now, density is used for mass calculation during creation, but mass is stored on particle.
+        // If we change density, we might want to update mass? 
+        // Or just assume this is called before adding particles.
+        // But mass is passed in add_particle.
+        // The user asked to specify density. 
+        // If add_particle takes mass, density is redundant or used for calculating mass from radius.
+        // Let's assume add_particle takes mass, so density in material is just for reference or future use (e.g. if we add by radius only).
+        // However, effective mass calculation in physics uses particle mass.
+        // So density in Material struct is maybe not used if we use particle.mass?
+        // Wait, effective_mass uses m1, m2.
+        // So density in Material is unused?
+        // Let's keep it consistent.
+    }
+
+    fn set_wall_material(&mut self, youngs_modulus: f32, poissons_ratio: f32, density: f32, friction_coefficient: f32, restitution_coefficient: f32) {
+        self.inner.wall_material = material::Material::new(youngs_modulus, poissons_ratio, density, friction_coefficient, restitution_coefficient);
+    }
+
+    fn set_periodic(&mut self, x: bool, y: bool, z: bool) {
+        self.inner.periodic = [x, y, z];
+    }
+
+    fn enable_gpu(&mut self) {
+        self.inner.enable_gpu();
+    }
+
+    fn run(&mut self, duration: f32) {
+        let steps = (duration / self.inner.dt).ceil() as usize;
+        let pb = indicatif::ProgressBar::new(steps as u64);
+        pb.set_style(indicatif::ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+            .unwrap()
+            .progress_chars("#>-"));
+            
+        for _ in 0..steps {
+            self.inner.step();
+            pb.inc(1);
+        }
+        pb.finish_with_message("Simulation complete");
+    }
+
+    fn write_vtk(&mut self, filename: String) -> PyResult<()> {
+        // Sync before writing
+        self.inner.sync_particles();
         vtk::write_vtk(&filename, &self.inner.particles).map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
         Ok(())
     }
