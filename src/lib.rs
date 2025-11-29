@@ -86,6 +86,26 @@ impl PySimulation {
         self.inner.enable_gpu();
     }
 
+    fn set_contact_models(&mut self, normal: String, tangential: String) -> PyResult<()> {
+        let normal_model = match normal.to_lowercase().as_str() {
+            "hertz" | "hertzian" => physics::NormalForceModel::Hertzian,
+            "linear" | "spring_dashpot" => physics::NormalForceModel::LinearSpringDashpot,
+            "hysteretic" => physics::NormalForceModel::Hysteretic,
+            _ => return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid normal force model")),
+        };
+
+        let tangential_model = match tangential.to_lowercase().as_str() {
+            "mindlin" => physics::TangentialForceModel::Mindlin,
+            "coulomb" => physics::TangentialForceModel::Coulomb,
+            "linear" | "spring_coulomb" => physics::TangentialForceModel::LinearSpringCoulomb,
+            _ => return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid tangential force model")),
+        };
+
+        self.inner.normal_model = normal_model;
+        self.inner.tangential_model = tangential_model;
+        Ok(())
+    }
+
     fn run(&mut self, duration: f32) {
         let steps = (duration / self.inner.dt).ceil() as usize;
         let pb = indicatif::ProgressBar::new(steps as u64);

@@ -44,6 +44,7 @@ struct SimulationParams {
     p_props2: [f32; 4],   // e, pad, pad, pad
     w_props: [f32; 4],    // E, nu, rho, mu
     w_props2: [f32; 4],   // e, pad, pad, pad
+    models: [u32; 4],     // normal_id, tangential_id, pad, pad
 }
 
 pub struct GpuSimulation {
@@ -57,7 +58,17 @@ pub struct GpuSimulation {
 }
 
 impl GpuSimulation {
-    pub async fn new(particles: &[Particle], dt: f32, bounds_min: glam::Vec3, bounds_max: glam::Vec3, periodic: [bool; 3], p_mat: Material, w_mat: Material) -> Self {
+    pub async fn new(
+        particles: &[Particle], 
+        dt: f32, 
+        bounds_min: glam::Vec3, 
+        bounds_max: glam::Vec3, 
+        periodic: [bool; 3], 
+        p_mat: Material, 
+        w_mat: Material,
+        normal_model: crate::physics::NormalForceModel,
+        tangential_model: crate::physics::TangentialForceModel
+    ) -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
@@ -94,6 +105,7 @@ impl GpuSimulation {
             p_props2: [p_mat.restitution_coefficient, 0.0, 0.0, 0.0],
             w_props: [w_mat.youngs_modulus, w_mat.poissons_ratio, w_mat.density, w_mat.friction_coefficient],
             w_props2: [w_mat.restitution_coefficient, 0.0, 0.0, 0.0],
+            models: [normal_model as u32, tangential_model as u32, 0, 0],
         };
 
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

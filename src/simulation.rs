@@ -3,7 +3,8 @@ use rayon::prelude::*;
 use crate::particle::Particle;
 use crate::grid::Grid;
 use crate::mesh::Mesh;
-use crate::material::Material;
+use crate::material::{Material, effective_radius, effective_mass, effective_youngs_modulus, shear_modulus, effective_shear_modulus};
+use crate::physics::{self, NormalForceModel, TangentialForceModel, hertzian_contact, linear_spring_dashpot, hysteretic_contact, mindlin_contact, coulomb_friction, linear_spring_coulomb};
 use crate::contact::Contact;
 use crate::gpu;
 use dashmap::DashMap;
@@ -24,6 +25,8 @@ pub struct Simulation {
     pub wall_material: Material,
     pub periodic: [bool; 3],
     pub gpu_sim: Option<gpu::GpuSimulation>,
+    pub normal_model: physics::NormalForceModel,
+    pub tangential_model: physics::TangentialForceModel,
 }
 
 impl Simulation {
@@ -50,6 +53,8 @@ impl Simulation {
             wall_material,
             periodic: [false; 3],
             gpu_sim: None,
+            normal_model: physics::NormalForceModel::Hertzian,
+            tangential_model: physics::TangentialForceModel::Mindlin,
         }
     }
 
@@ -74,6 +79,8 @@ impl Simulation {
             self.periodic,
             self.particle_material,
             self.wall_material,
+            self.normal_model,
+            self.tangential_model,
         ));
         self.gpu_sim = Some(gpu_sim);
     }
@@ -230,12 +237,37 @@ impl Simulation {
                     let mut contact = contacts.entry(key).or_insert(Contact::new());
                     contact.age += 1;
                     
-                    // Normal Force (Hertzian)
-                    let f_normal = hertzian_contact(overlap, normal, rel_vel, e_star, r_star, m_star, p_mat.restitution_coefficient);
+                    // Normal Force
+                    let f_normal = match self.normal_model {
+                        NormalForceModel::Hertzian => hertzian_contact(overlap, normal, rel_vel, e_star, r_star, m_star, p_mat.restitution_coefficient),
+                        NormalForceModel::LinearSpringDashpot => {
+                            // Need kn, gn. Derive from material props?
+                            // For now, use some defaults or derived values.
+                            // Kn ~ E * R
+                            let kn = e_star * r_star;
+                            // Gn ~ sqrt(m * kn)
+                            let gn = 0.5 * (m_star * kn).sqrt();
+                            linear_spring_dashpot(overlap, normal, rel_vel, kn, gn)
+                        },
+                        NormalForceModel::Hysteretic => {
+                             // Placeholder
+                             let kn = e_star * r_star;
+                             hysteretic_contact(overlap, normal, &mut contact, kn, kn * 1.5)
+                        }
+                    };
+                    
                     let fn_mag = f_normal.length();
                     
-                    // Tangential Force (Mindlin)
-                    let f_tangent = mindlin_contact(fn_mag, overlap, rel_vel, normal, &mut contact, g_star, r_star, p_mat.friction_coefficient, dt);
+                    // Tangential Force
+                    let f_tangent = match self.tangential_model {
+                        TangentialForceModel::Mindlin => mindlin_contact(fn_mag, overlap, rel_vel, normal, &mut contact, g_star, r_star, p_mat.friction_coefficient, dt),
+                        TangentialForceModel::Coulomb => coulomb_friction(fn_mag, rel_vel, normal, p_mat.friction_coefficient),
+                        TangentialForceModel::LinearSpringCoulomb => {
+                             // Kt ~ G * R
+                             let kt = g_star * r_star;
+                             linear_spring_coulomb(fn_mag, rel_vel, normal, &mut contact, kt, p_mat.friction_coefficient, dt)
+                        }
+                    };
                     
                     f_total += f_normal + f_tangent;
                 }
