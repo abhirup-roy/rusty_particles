@@ -9,6 +9,7 @@ use crate::contact::Contact;
 use crate::gpu;
 use dashmap::DashMap;
 use mpi::traits::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct Simulation {
     pub particles: Vec<Particle>,
@@ -280,6 +281,9 @@ impl Simulation {
         let contacts = &self.contacts;
         let meshes = &self.meshes;
         
+        let excessive_overlap = AtomicBool::new(false);
+        let excessive_overlap_ref = &excessive_overlap;
+
         let forces: Vec<(Vec3, Vec3)> = self.particles.par_iter().enumerate().map(|(i, p)| {
             let mut f_total = Vec3::ZERO;
             let mut torque_total = Vec3::ZERO;
@@ -312,6 +316,18 @@ impl Simulation {
                 if dist_sq < r_sum * r_sum {
                     let dist = dist_sq.sqrt();
                     let overlap = r_sum - dist;
+                    
+                    // Check for excessive overlap (> 20% of smaller radius)
+                    // Avoid expensive check if flag is already set? 
+                    // But we want to warn if ANY pair has excessive overlap.
+                    // Relaxed ordering is fine.
+                    if !excessive_overlap_ref.load(Ordering::Relaxed) {
+                        let min_radius = p.radius.min(other.radius);
+                        if overlap > 0.2 * min_radius {
+                            excessive_overlap_ref.store(true, Ordering::Relaxed);
+                        }
+                    }
+
                     let normal = if dist > 1e-6 { dist_vec / dist } else { Vec3::Y };
                     
                     // Relative velocity at contact point
@@ -381,6 +397,13 @@ impl Simulation {
             for mesh in meshes {
                 for triangle in &mesh.triangles {
                     if let Some((penetration, normal)) = triangle.intersect_sphere(p.position, p.radius) {
+                        // Check for excessive overlap with wall
+                        if !excessive_overlap_ref.load(Ordering::Relaxed) {
+                            if penetration > 0.2 * p.radius {
+                                excessive_overlap_ref.store(true, Ordering::Relaxed);
+                            }
+                        }
+
                         // Wall is static (v=0, w=0)
                         // Contact point relative to particle center
                         let r_a = -normal * p.radius;
@@ -411,6 +434,10 @@ impl Simulation {
             
             (f_total, torque_total)
         }).collect();
+
+        if excessive_overlap.load(Ordering::Relaxed) {
+            eprintln!("Warning: Excessive particle overlap detected (>20% of radius). Simulation may be unstable.");
+        }
         
         // Apply forces (only to local particles)
     self.particles.par_iter_mut().take(local_count).enumerate().for_each(|(i, p)| {
