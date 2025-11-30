@@ -95,8 +95,8 @@ impl PySimulation {
         self.inner.periodic = [x, y, z];
     }
 
-    fn enable_gpu(&mut self) {
-        self.inner.enable_gpu();
+    fn enable_gpu(&mut self) -> PyResult<()> {
+        self.inner.enable_gpu().map_err(|e| PyRuntimeError::new_err(e))
     }
 
     fn init_mpi(&mut self) {

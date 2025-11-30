@@ -11,7 +11,7 @@ clap = { version = "4.4", features = ["derive"] }
 anyhow = "1.0"
 fastrand = "2.0"
 stl_io = "0.7"
-pyo3 = { version = "0.20", features = ["extension-module"] }
+pyo3 = { version = "0.20" }
 dashmap = "5.5"
 wgpu = "0.19"
 bytemuck = { version = "1.14", features = ["derive"] }
@@ -22,3 +22,6 @@ mpi = { version = "0.8", default-features = false, features = ["derive"] }
 [lib]
 name = "rusty_particles"
 crate-type = ["cdylib", "rlib"]
+
+[features]
+extension-module = ["pyo3/extension-module"]

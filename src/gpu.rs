@@ -68,7 +68,7 @@ impl GpuSimulation {
         w_mat: Material,
         normal_model: crate::physics::NormalForceModel,
         tangential_model: crate::physics::TangentialForceModel
-    ) -> Self {
+    ) -> Result<Self, String> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
@@ -78,7 +78,7 @@ impl GpuSimulation {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
-        }).await.expect("Failed to find an appropriate adapter");
+        }).await.ok_or("Failed to find an appropriate adapter")?;
 
         let (device, queue) = adapter.request_device(
             &wgpu::DeviceDescriptor {
@@ -87,7 +87,7 @@ impl GpuSimulation {
                 required_limits: wgpu::Limits::default(),
             },
             None,
-        ).await.expect("Failed to create device");
+        ).await.map_err(|e| format!("Failed to create device: {}", e))?;
 
         let gpu_particles: Vec<GpuParticle> = particles.iter().map(GpuParticle::from_particle).collect();
         
@@ -139,7 +139,7 @@ impl GpuSimulation {
             ],
         });
 
-        Self {
+        Ok(Self {
             device,
             queue,
             particle_buffer,
@@ -147,7 +147,7 @@ impl GpuSimulation {
             compute_pipeline,
             bind_group,
             particle_count: particles.len(),
-        }
+        })
     }
 
     pub fn step(&self) {
