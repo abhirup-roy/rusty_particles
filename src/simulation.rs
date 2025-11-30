@@ -1,5 +1,4 @@
 use glam::Vec3;
-use rayon::prelude::*;
 use crate::particle::Particle;
 use crate::grid::Grid;
 use crate::mesh::Mesh;
@@ -452,7 +451,7 @@ impl Simulation {
                         let r_star = p.radius; 
                         let m_star = p.mass; 
                         let e_star = effective_youngs_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio, w_mat.youngs_modulus, w_mat.poissons_ratio);
-                        let g_star = effective_shear_modulus(shear_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio), shear_modulus(w_mat.youngs_modulus, w_mat.poissons_ratio));
+                        let _g_star = effective_shear_modulus(shear_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio), shear_modulus(w_mat.youngs_modulus, w_mat.poissons_ratio));
                         
                         // Normal force
                         let f_normal = match self.normal_model {
@@ -588,7 +587,7 @@ impl Simulation {
         
         // Recv from Right (which sent to its Left, i.e., us)
         if right_rank >= 0 {
-            let (msg, status) = world.process_at_rank(right_rank).receive_vec::<crate::particle::MpiParticle>();
+            let (msg, _status) = world.process_at_rank(right_rank).receive_vec::<crate::particle::MpiParticle>();
             for p in msg {
                 self.particles.push(crate::particle::Particle::from(p));
             }
@@ -600,7 +599,7 @@ impl Simulation {
         }
         
         if left_rank >= 0 {
-            let (msg, status) = world.process_at_rank(left_rank).receive_vec::<crate::particle::MpiParticle>();
+            let (msg, _status) = world.process_at_rank(left_rank).receive_vec::<crate::particle::MpiParticle>();
             for p in msg {
                 self.particles.push(crate::particle::Particle::from(p));
             }

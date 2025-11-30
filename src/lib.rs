@@ -11,7 +11,6 @@ pub mod gpu;
 use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
 use glam::Vec3;
-use rayon::ThreadPoolBuilder;
 
 #[pyfunction]
 fn set_num_threads(num_threads: usize) -> PyResult<()> {

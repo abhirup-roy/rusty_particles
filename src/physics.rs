@@ -35,18 +35,11 @@ pub fn linear_spring_dashpot(
     gn: f32,
 ) -> Vec3 {
     let vn = relative_velocity.dot(normal);
-    let force_mag = -kn * overlap - gn * vn;
     // Force is repulsive, so positive magnitude pushes particles apart?
     // Usually: F = -k*delta - c*v
     // If overlap is positive (penetration), force should be repulsive (positive along normal).
     // Wait, if normal points from B to A, and we want force on A.
     // Let's assume normal points from other to self.
-    // Force = (kn * overlap - gn * vn) * normal
-    // If overlap > 0, we want repulsion.
-    // Let's stick to: F_n = (kn * delta + gn * vn_mag) * n
-    // But usually damping opposes velocity.
-    
-    let fn_mag = kn * overlap + gn * vn; // vn is negative if approaching
     // If approaching (vn < 0), damping adds to stiffness? No, damping resists motion.
     // If approaching, force should be higher to stop it.
     // So if vn < 0, we want more repulsive force.

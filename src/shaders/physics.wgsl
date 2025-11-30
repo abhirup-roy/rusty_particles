@@ -1,10 +1,7 @@
 struct Particle {
-    position: vec3<f32>,
-    _pad1: f32,
-    velocity: vec3<f32>,
-    _pad2: f32,
-    acceleration: vec3<f32>,
-    _pad3: f32,
+    position_pad: vec4<f32>, // .xyz = position
+    velocity_pad: vec4<f32>, // .xyz = velocity
+    acceleration_pad: vec4<f32>, // .xyz = acceleration
     radius: f32,
     mass: f32,
     id: u32,
@@ -55,7 +52,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (i == idx) { continue; }
         let other = particles[i];
         
-        var dist_vec = p.position - other.position;
+        var dist_vec = p.position_pad.xyz - other.position_pad.xyz;
         let bounds_size = params.bounds_max.xyz - params.bounds_min.xyz;
         
         // MIC
@@ -77,9 +74,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         
         if (dist_sq < r_sum * r_sum && dist_sq > 0.00001) {
             let dist = sqrt(dist_sq);
-            let overlap = r_sum - dist;
+            let overlap = max(r_sum - dist, 0.0); // Safety max
             let normal = dist_vec / dist;
-            let rel_vel = p.velocity - other.velocity;
+            let rel_vel = p.velocity_pad.xyz - other.velocity_pad.xyz;
             
             // Normal Force
             var total_fn = 0.0;
@@ -145,10 +142,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let bounds_max = params.bounds_max.xyz;
     
     // Floor (Y-)
-    if (params.periodic.y == 0u && p.position.y - p.radius < bounds_min.y) {
-        let penetration = bounds_min.y - (p.position.y - p.radius);
+    if (params.periodic.y == 0u && p.position_pad.y - p.radius < bounds_min.y) {
+        let penetration = max(bounds_min.y - (p.position_pad.y - p.radius), 0.0);
         let normal = vec3<f32>(0.0, 1.0, 0.0);
-        let rel_vel = -p.velocity;
+        let rel_vel = -p.velocity_pad.xyz;
         
         // Hertzian Wall
         let r_star = p.radius;
@@ -182,25 +179,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Other walls...
     
-    p.acceleration = force / p.mass;
+    p.acceleration_pad = vec4<f32>(force / p.mass, 0.0);
     
     // Integration (Symplectic Euler)
-    p.velocity += p.acceleration * dt;
-    p.position += p.velocity * dt;
+    p.velocity_pad += p.acceleration_pad * dt;
+    p.position_pad += p.velocity_pad * dt;
     
     // Wrap
     let bounds_size = params.bounds_max.xyz - params.bounds_min.xyz;
     if (params.periodic.x != 0u) {
-        if (p.position.x < bounds_min.x) { p.position.x += bounds_size.x; }
-        else if (p.position.x >= bounds_max.x) { p.position.x -= bounds_size.x; }
+        if (p.position_pad.x < bounds_min.x) { p.position_pad.x += bounds_size.x; }
+        else if (p.position_pad.x >= bounds_max.x) { p.position_pad.x -= bounds_size.x; }
     }
     if (params.periodic.y != 0u) {
-        if (p.position.y < bounds_min.y) { p.position.y += bounds_size.y; }
-        else if (p.position.y >= bounds_max.y) { p.position.y -= bounds_size.y; }
+        if (p.position_pad.y < bounds_min.y) { p.position_pad.y += bounds_size.y; }
+        else if (p.position_pad.y >= bounds_max.y) { p.position_pad.y -= bounds_size.y; }
     }
     if (params.periodic.z != 0u) {
-        if (p.position.z < bounds_min.z) { p.position.z += bounds_size.z; }
-        else if (p.position.z >= bounds_max.z) { p.position.z -= bounds_size.z; }
+        if (p.position_pad.z < bounds_min.z) { p.position_pad.z += bounds_size.z; }
+        else if (p.position_pad.z >= bounds_max.z) { p.position_pad.z -= bounds_size.z; }
     }
     
     particles[idx] = p;
