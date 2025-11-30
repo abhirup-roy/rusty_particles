@@ -30,3 +30,39 @@ impl Particle {
         // self.acceleration = Vec3::ZERO; // Reset for next step
     }
 }
+
+#[derive(Clone, Copy, Debug, mpi::traits::Equivalence)]
+pub struct MpiParticle {
+    pub id: usize,
+    pub position: [f32; 3],
+    pub velocity: [f32; 3],
+    pub acceleration: [f32; 3],
+    pub radius: f32,
+    pub mass: f32,
+}
+
+impl From<Particle> for MpiParticle {
+    fn from(p: Particle) -> Self {
+        Self {
+            id: p.id,
+            position: p.position.to_array(),
+            velocity: p.velocity.to_array(),
+            acceleration: p.acceleration.to_array(),
+            radius: p.radius,
+            mass: p.mass,
+        }
+    }
+}
+
+impl From<MpiParticle> for Particle {
+    fn from(p: MpiParticle) -> Self {
+        Self {
+            id: p.id,
+            position: Vec3::from_array(p.position),
+            velocity: Vec3::from_array(p.velocity),
+            acceleration: Vec3::from_array(p.acceleration),
+            radius: p.radius,
+            mass: p.mass,
+        }
+    }
+}
