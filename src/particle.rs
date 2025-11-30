@@ -8,10 +8,14 @@ pub struct Particle {
     pub acceleration: Vec3,
     pub radius: f32,
     pub mass: f32,
+    pub fixed: bool,
+    // Kahan summation residuals
+    pub position_residual: Vec3,
+    pub velocity_residual: Vec3,
 }
 
 impl Particle {
-    pub fn new(id: usize, position: Vec3, radius: f32, mass: f32) -> Self {
+    pub fn new(id: usize, position: Vec3, radius: f32, mass: f32, fixed: bool) -> Self {
         Self {
             id,
             position,
@@ -19,6 +23,9 @@ impl Particle {
             acceleration: Vec3::ZERO,
             radius,
             mass,
+            fixed,
+            position_residual: Vec3::ZERO,
+            velocity_residual: Vec3::ZERO,
         }
     }
 
@@ -39,6 +46,7 @@ pub struct MpiParticle {
     pub acceleration: [f32; 3],
     pub radius: f32,
     pub mass: f32,
+    pub fixed: bool,
 }
 
 impl From<Particle> for MpiParticle {
@@ -50,6 +58,7 @@ impl From<Particle> for MpiParticle {
             acceleration: p.acceleration.to_array(),
             radius: p.radius,
             mass: p.mass,
+            fixed: p.fixed,
         }
     }
 }
@@ -63,6 +72,9 @@ impl From<MpiParticle> for Particle {
             acceleration: Vec3::from_array(p.acceleration),
             radius: p.radius,
             mass: p.mass,
+            fixed: p.fixed,
+            position_residual: Vec3::ZERO,
+            velocity_residual: Vec3::ZERO,
         }
     }
 }

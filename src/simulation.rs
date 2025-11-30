@@ -67,9 +67,9 @@ impl Simulation {
         }
     }
 
-    pub fn add_particle(&mut self, position: Vec3, radius: f32, mass: f32) {
+    pub fn add_particle(&mut self, position: Vec3, radius: f32, mass: f32, fixed: bool) {
         let id = self.particles.len();
-        self.particles.push(Particle::new(id, position, radius, mass));
+        self.particles.push(Particle::new(id, position, radius, mass, fixed));
     }
 
     pub fn add_mesh(&mut self, mesh: Mesh) {
@@ -201,8 +201,21 @@ impl Simulation {
         // v(t + 0.5dt) = v(t) + 0.5 * a(t) * dt
         // x(t + dt) = x(t) + v(t + 0.5dt) * dt
         self.particles.par_iter_mut().for_each(|p| {
-            p.velocity += 0.5 * p.acceleration * dt;
-            p.position += p.velocity * dt;
+            if !p.fixed {
+                // Kahan summation for Velocity
+                let dv = 0.5 * p.acceleration * dt;
+                let y_v = dv - p.velocity_residual;
+                let t_v = p.velocity + y_v;
+                p.velocity_residual = (t_v - p.velocity) - y_v;
+                p.velocity = t_v;
+
+                // Kahan summation for Position
+                let dx = p.velocity * dt;
+                let y_x = dx - p.position_residual;
+                let t_x = p.position + y_x;
+                p.position_residual = (t_x - p.position) - y_x;
+                p.position = t_x;
+            }
         });
 
         // 2. Force Calculation
@@ -386,7 +399,13 @@ impl Simulation {
     // 3. Second Half Update (Velocity Verlet)
         // v(t + dt) = v(t + 0.5dt) + 0.5 * a(t + dt) * dt
         self.particles.par_iter_mut().for_each(|p| {
-            p.velocity += 0.5 * p.acceleration * dt;
+            if !p.fixed {
+                let dv = 0.5 * p.acceleration * dt;
+                let y_v = dv - p.velocity_residual;
+                let t_v = p.velocity + y_v;
+                p.velocity_residual = (t_v - p.velocity) - y_v;
+                p.velocity = t_v;
+            }
         });
     }
 

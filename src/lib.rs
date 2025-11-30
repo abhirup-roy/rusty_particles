@@ -54,9 +54,10 @@ impl PySimulation {
         }
     }
 
-    fn add_particle(&mut self, x: f32, y: f32, z: f32, radius: f32, mass: f32) {
+    #[pyo3(signature = (x, y, z, radius, mass, fixed=false))]
+    fn add_particle(&mut self, x: f32, y: f32, z: f32, radius: f32, mass: f32, fixed: bool) {
         let pos = Vec3::new(x, y, z);
-        self.inner.add_particle(pos, radius, mass);
+        self.inner.add_particle(pos, radius, mass, fixed);
     }
 
     fn add_mesh(&mut self, path: String) -> PyResult<()> {
@@ -146,5 +147,13 @@ impl PySimulation {
     
     fn particle_count(&self) -> usize {
         self.inner.particles.len()
+    }
+
+    fn get_particle_position(&self, index: usize) -> PyResult<(f32, f32, f32)> {
+        if index >= self.inner.particles.len() {
+            return Err(PyErr::new::<pyo3::exceptions::PyIndexError, _>("Particle index out of bounds"));
+        }
+        let p = &self.inner.particles[index];
+        Ok((p.position.x, p.position.y, p.position.z))
     }
 }
