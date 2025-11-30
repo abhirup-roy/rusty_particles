@@ -6,6 +6,8 @@ pub enum NormalForceModel {
     LinearSpringDashpot,
     Hertzian,
     Hysteretic,
+    JKR,
+    SimplifiedJKR,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -33,18 +35,11 @@ pub fn linear_spring_dashpot(
     gn: f32,
 ) -> Vec3 {
     let vn = relative_velocity.dot(normal);
-    let force_mag = -kn * overlap - gn * vn;
     // Force is repulsive, so positive magnitude pushes particles apart?
     // Usually: F = -k*delta - c*v
     // If overlap is positive (penetration), force should be repulsive (positive along normal).
     // Wait, if normal points from B to A, and we want force on A.
     // Let's assume normal points from other to self.
-    // Force = (kn * overlap - gn * vn) * normal
-    // If overlap > 0, we want repulsion.
-    // Let's stick to: F_n = (kn * delta + gn * vn_mag) * n
-    // But usually damping opposes velocity.
-    
-    let fn_mag = kn * overlap + gn * vn; // vn is negative if approaching
     // If approaching (vn < 0), damping adds to stiffness? No, damping resists motion.
     // If approaching, force should be higher to stop it.
     // So if vn < 0, we want more repulsive force.
@@ -98,6 +93,196 @@ pub fn hertzian_contact(
     let force_damping = -cn * vn;
     
     let total_force = (force_elastic + force_damping).max(0.0);
+    total_force * normal
+}
+
+// JKR Contact Model
+pub fn compute_jkr_force(
+    overlap: f32,
+    normal: Vec3,
+    _relative_velocity: Vec3, // Damping not specified in JKR, usually added separately
+    e_star: f32,
+    r_star: f32,
+    surface_energy: f32,
+) -> Vec3 {
+    // JKR equations provided by user:
+    // delta = a^2 / R* - sqrt(8 * pi * gamma * a / E*)
+    // F = 4 * E* * a^3 / (3 * R*) - sqrt(8 * pi * gamma * E* * a^3)
+    // Pull-off force: F_pull = -2/3 * pi * gamma * R*
+    
+    // We need to solve for a (contact radius) given overlap (delta).
+    // Equation: f(a) = a^2 / R* - sqrt(8 * pi * gamma * a / E*) - delta = 0
+    // Let C = 8 * pi * gamma / E*
+    // f(a) = a^2 / R* - sqrt(C * a) - delta = 0
+    // f'(a) = 2*a / R* - 0.5 * sqrt(C) * a^(-1/2)
+    
+    // Newton-Raphson iteration
+    // Initial guess: Hertzian a0 = sqrt(R* * delta) (if delta > 0)
+    // If delta <= 0, we need a better guess. JKR allows contact for negative overlap.
+    // For delta < 0, a is small but positive.
+    
+    let gamma = surface_energy;
+    if gamma <= 0.0 {
+        // Fallback to Hertzian if no adhesion
+        // We don't have mass here for damping, so just elastic part
+        let kn = 4.0 / 3.0 * e_star * r_star.sqrt();
+        let f_mag = if overlap > 0.0 { kn * overlap.powf(1.5) } else { 0.0 };
+        return f_mag * normal;
+    }
+
+    let c_val = 8.0 * std::f32::consts::PI * gamma / e_star;
+    let sqrt_c = c_val.sqrt();
+    
+    let mut a = if overlap > 0.0 {
+        (r_star * overlap).sqrt()
+    } else {
+        // Safe guess for negative overlap
+        r_star * 0.5
+    };
+    
+    // Iteration
+    for _ in 0..20 {
+        if a <= 0.0 { a = 1e-9; } 
+        
+        let term_sqrt = (c_val * a).sqrt();
+        let f_val = a * a / r_star - term_sqrt - overlap;
+        let df_val = 2.0 * a / r_star - 0.5 * sqrt_c / a.sqrt();
+        
+        if df_val.abs() < 1e-9 { break; }
+        
+        let delta_a = f_val / df_val;
+        let max_step = a * 0.5;
+        let step = delta_a.clamp(-max_step, max_step);
+        a -= step;
+        
+        if step.abs() < 1e-6 * r_star { break; }
+    }
+    
+    // Check convergence
+    let term_sqrt = (c_val * a).sqrt();
+    let f_val = a * a / r_star - term_sqrt - overlap;
+    if f_val.abs() > 1e-3 * r_star {
+        // No root found (likely separated beyond pull-off)
+        return Vec3::ZERO;
+    }
+
+    if a <= 0.0 {
+        return Vec3::ZERO;
+    }
+    
+    // Calculate Force
+    let term1 = 4.0 * e_star * a.powi(3) / (3.0 * r_star);
+    let term2 = (8.0 * std::f32::consts::PI * gamma * e_star * a.powi(3)).sqrt();
+    
+    let force_mag = term1 - term2;
+    
+    // Check pull-off limit
+    let f_pull = -2.0 / 3.0 * std::f32::consts::PI * gamma * r_star;
+    
+    if force_mag < f_pull {
+        return Vec3::ZERO;
+    }
+    
+    force_mag * normal
+}
+
+// Simplified JKR (sJKR) / Cohesive Hertz
+// Explicit approximation with hysteresis.
+// F_pull = 1.5 * pi * gamma * R*
+// delta_c = -sqrt(3 * pi^2 * gamma^2 * R* / E*^2)
+// Loading: Hertzian
+// Unloading: Hertzian - F_pull
+// Detachment: delta < delta_c
+pub fn compute_sjkr_force(
+    overlap: f32,
+    normal: Vec3,
+    relative_velocity: Vec3,
+    e_star: f32,
+    r_star: f32,
+    surface_energy: f32,
+) -> Vec3 {
+    let gamma = surface_energy;
+    if gamma <= 0.0 {
+        // Fallback to Hertzian
+        let kn = 4.0 / 3.0 * e_star * r_star.sqrt();
+        let f_mag = if overlap > 0.0 { kn * overlap.powf(1.5) } else { 0.0 };
+        return f_mag * normal;
+    }
+
+    // Critical pull-off parameters
+    // F_pull_magnitude = 1.5 * pi * gamma * R*
+    let f_pull = 1.5 * std::f32::consts::PI * gamma * r_star;
+    
+    // delta_c = -sqrt(3 * pi^2 * gamma^2 * R* / E*^2)
+    // term inside sqrt: 3 * pi^2 * gamma^2 * R* / E*^2
+    let term = 3.0 * std::f32::consts::PI.powi(2) * gamma.powi(2) * r_star / e_star.powi(2);
+    let delta_c = -term.sqrt();
+    
+    // Check detachment
+    if overlap < delta_c {
+        return Vec3::ZERO;
+    }
+    
+    // Determine state (Loading vs Unloading)
+    // We use relative velocity along normal.
+    // v_n = v_rel . n
+    // If v_n < 0, particles are approaching (Loading).
+    // If v_n > 0, particles are separating (Unloading).
+    // Note: relative_velocity is v_a - v_b. 
+    // If particles move towards each other, v_a moves to right, v_b to left?
+    // Let's check convention in simulation.rs:
+    // let rel_vel = p.velocity - other.velocity ...
+    // let normal = dist_vec / dist; (points from other to p)
+    // vn = rel_vel.dot(normal)
+    // If p moves towards other (opposing normal), vn < 0.
+    // So vn < 0 is approaching (Loading).
+    // vn > 0 is separating (Unloading).
+    
+    let vn = relative_velocity.dot(normal);
+    let is_unloading = vn > 0.0;
+    
+    // Coherency parameter (0 for loading, 1 for unloading)
+    // We can also use a smooth transition if needed, but sJKR usually implies a switch.
+    let coherency = if is_unloading { 1.0 } else { 0.0 };
+    
+    // Hertzian force part
+    // F_Hertz = 4/3 * E* * sqrt(R*) * delta^1.5
+    // Note: delta can be negative in sJKR (necking).
+    // Standard Hertz is 0 for delta < 0.
+    // However, for sJKR unloading, we extend the curve?
+    // "F_n = F_Hertz - F_pull_magnitude"
+    // If delta < 0, F_Hertz is undefined (complex) or 0?
+    // Usually sJKR assumes contact area exists until delta_c.
+    // But Hertzian formula a = sqrt(R*delta) implies delta > 0.
+    // The "Cohesive Hertz" model often uses:
+    // F = K * delta^1.5 - F_pull (for unloading)
+    // But if delta < 0, this doesn't work directly.
+    // Maybe the approximation is:
+    // F = F_Hertz(delta) - coherency * F_pull
+    // And for delta < 0, F_Hertz is 0, so F = -F_pull.
+    // This gives a constant adhesive force for negative overlap?
+    // Or does it follow a different curve?
+    // The user said: "F_n = F_Hertz - F_pull_magnitude ... clamped to 0 if delta is negative"
+    // So F_Hertz is 0 if delta < 0.
+    // Thus for delta < 0 (but > delta_c), F = -F_pull.
+    // This creates a constant pull-off force region.
+    
+    let f_hertz = if overlap > 0.0 {
+        4.0 / 3.0 * e_star * r_star.sqrt() * overlap.powf(1.5)
+    } else {
+        0.0
+    };
+    
+    let f_adhesion = coherency * f_pull;
+    
+    let total_force = f_hertz - f_adhesion;
+    
+    // Ensure we don't return negative force if we are loading?
+    // Loading: F = F_Hertz. (No adhesion).
+    // Unloading: F = F_Hertz - F_pull.
+    
+    // What if total_force is negative during unloading? That's expected (attraction).
+    
     total_force * normal
 }
 

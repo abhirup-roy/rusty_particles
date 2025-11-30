@@ -1,5 +1,4 @@
 use glam::Vec3;
-use rayon::prelude::*;
 use crate::particle::Particle;
 use crate::grid::Grid;
 use crate::mesh::Mesh;
@@ -9,6 +8,7 @@ use crate::contact::Contact;
 use crate::gpu;
 use dashmap::DashMap;
 use mpi::traits::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct Simulation {
     pub particles: Vec<Particle>,
@@ -42,8 +42,8 @@ impl Simulation {
         let grid = Grid::new(1.0, bounds_min, bounds_max); // Cell size will be updated
         
         // Default materials
-        let particle_material = Material::new(1e7, 0.3, 2500.0, 0.5, 0.5);
-        let wall_material = Material::new(1e9, 0.3, 7800.0, 0.5, 0.5);
+        let particle_material = Material::new(1e7, 0.3, 2500.0, 0.5, 0.5, 0.0);
+        let wall_material = Material::new(1e9, 0.3, 7800.0, 0.5, 0.5, 0.0);
 
         Self {
             particles,
@@ -280,6 +280,9 @@ impl Simulation {
         let contacts = &self.contacts;
         let meshes = &self.meshes;
         
+        let excessive_overlap = AtomicBool::new(false);
+        let excessive_overlap_ref = &excessive_overlap;
+
         let forces: Vec<(Vec3, Vec3)> = self.particles.par_iter().enumerate().map(|(i, p)| {
             let mut f_total = Vec3::ZERO;
             let mut torque_total = Vec3::ZERO;
@@ -309,9 +312,32 @@ impl Simulation {
                 let dist_sq = dist_vec.length_squared();
                 let r_sum = p.radius + other.radius;
                 
-                if dist_sq < r_sum * r_sum {
+                // For JKR, we need to check for contact even if slightly separated (necking).
+                // We add a margin.
+                let margin = if matches!(self.normal_model, NormalForceModel::JKR | NormalForceModel::SimplifiedJKR) {
+                    r_sum * 0.5 // Allow up to 50% radius separation? Maybe too much.
+                    // Pull-off distance is usually small.
+                } else {
+                    0.0
+                };
+                
+                let cutoff = r_sum + margin;
+                
+                if dist_sq < cutoff * cutoff {
                     let dist = dist_sq.sqrt();
                     let overlap = r_sum - dist;
+                    
+                    // Check for excessive overlap (> 20% of smaller radius)
+                    // Avoid expensive check if flag is already set? 
+                    // But we want to warn if ANY pair has excessive overlap.
+                    // Relaxed ordering is fine.
+                    if !excessive_overlap_ref.load(Ordering::Relaxed) {
+                        let min_radius = p.radius.min(other.radius);
+                        if overlap > 0.2 * min_radius {
+                            excessive_overlap_ref.store(true, Ordering::Relaxed);
+                        }
+                    }
+
                     let normal = if dist > 1e-6 { dist_vec / dist } else { Vec3::Y };
                     
                     // Relative velocity at contact point
@@ -352,6 +378,33 @@ impl Simulation {
                         NormalForceModel::Hysteretic => {
                              let kn = e_star * r_star;
                              hysteretic_contact(overlap, normal, &mut contact, kn, kn * 1.5)
+                        },
+                        NormalForceModel::JKR => {
+                            // Use effective surface energy?
+                            // Usually gamma = sqrt(gamma1 * gamma2) or similar.
+                            // Let's assume particle material gamma for P-P.
+                            // Or average?
+                            // JKR usually defines W = gamma1 + gamma2 - gamma12.
+                            // For identical materials W = 2 * gamma.
+                            // The formula uses gamma as "surface energy" or "work of adhesion"?
+                            // User said "gamma: Surface energy (adhesion work)".
+                            // If it's work of adhesion, we should combine.
+                            // Let's assume the material property is surface energy per area.
+                            // Work of adhesion W = 2 * gamma (for same material).
+                            // The user's formula uses "gamma".
+                            // "F_pull = -2/3 pi gamma R*".
+                            // Standard JKR pull-off is -1.5 pi W R*.
+                            // If user's gamma is W, then -1.5 pi gamma R*.
+                            // User said -2/3 pi gamma R*.
+                            // This matches DMT pull-off if gamma is W? No, DMT is -2 pi R W.
+                            // Let's just pass the material's gamma directly as requested.
+                            // If different materials, maybe average?
+                            let gamma = (p_mat.surface_energy + p_mat.surface_energy) * 0.5;
+                            compute_jkr_force(overlap, normal, rel_vel, e_star, r_star, gamma)
+                        },
+                        NormalForceModel::SimplifiedJKR => {
+                            let gamma = (p_mat.surface_energy + p_mat.surface_energy) * 0.5;
+                            compute_sjkr_force(overlap, normal, rel_vel, e_star, r_star, gamma)
                         }
                     };
                     
@@ -381,6 +434,13 @@ impl Simulation {
             for mesh in meshes {
                 for triangle in &mesh.triangles {
                     if let Some((penetration, normal)) = triangle.intersect_sphere(p.position, p.radius) {
+                        // Check for excessive overlap with wall
+                        if !excessive_overlap_ref.load(Ordering::Relaxed) {
+                            if penetration > 0.2 * p.radius {
+                                excessive_overlap_ref.store(true, Ordering::Relaxed);
+                            }
+                        }
+
                         // Wall is static (v=0, w=0)
                         // Contact point relative to particle center
                         let r_a = -normal * p.radius;
@@ -391,10 +451,32 @@ impl Simulation {
                         let r_star = p.radius; 
                         let m_star = p.mass; 
                         let e_star = effective_youngs_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio, w_mat.youngs_modulus, w_mat.poissons_ratio);
-                        let g_star = effective_shear_modulus(shear_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio), shear_modulus(w_mat.youngs_modulus, w_mat.poissons_ratio));
+                        let _g_star = effective_shear_modulus(shear_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio), shear_modulus(w_mat.youngs_modulus, w_mat.poissons_ratio));
                         
-                        // Hertzian normal force
-                        let f_normal = hertzian_contact(penetration, normal, rel_vel, e_star, r_star, m_star, p_mat.restitution_coefficient);
+                        // Normal force
+                        let f_normal = match self.normal_model {
+                            NormalForceModel::Hertzian => hertzian_contact(penetration, normal, rel_vel, e_star, r_star, m_star, p_mat.restitution_coefficient),
+                            NormalForceModel::LinearSpringDashpot => {
+                                let kn = e_star * r_star;
+                                let gn = 0.5 * (m_star * kn).sqrt();
+                                linear_spring_dashpot(penetration, normal, rel_vel, kn, gn)
+                            },
+                            NormalForceModel::Hysteretic => {
+                                // Placeholder
+                                let kn = e_star * r_star;
+                                // We don't have contact state for walls easily yet.
+                                // Fallback to linear
+                                linear_spring_dashpot(penetration, normal, rel_vel, kn, 0.0)
+                            },
+                            NormalForceModel::JKR => {
+                                let gamma = (p_mat.surface_energy + w_mat.surface_energy) * 0.5;
+                                compute_jkr_force(penetration, normal, rel_vel, e_star, r_star, gamma)
+                            },
+                            NormalForceModel::SimplifiedJKR => {
+                                let gamma = (p_mat.surface_energy + w_mat.surface_energy) * 0.5;
+                                compute_sjkr_force(penetration, normal, rel_vel, e_star, r_star, gamma)
+                            }
+                        };
                         
                         // Simple Coulomb for wall
                         let fn_mag = f_normal.length();
@@ -411,6 +493,10 @@ impl Simulation {
             
             (f_total, torque_total)
         }).collect();
+
+        if excessive_overlap.load(Ordering::Relaxed) {
+            eprintln!("Warning: Excessive particle overlap detected (>20% of radius). Simulation may be unstable.");
+        }
         
         // Apply forces (only to local particles)
     self.particles.par_iter_mut().take(local_count).enumerate().for_each(|(i, p)| {
@@ -501,7 +587,7 @@ impl Simulation {
         
         // Recv from Right (which sent to its Left, i.e., us)
         if right_rank >= 0 {
-            let (msg, status) = world.process_at_rank(right_rank).receive_vec::<crate::particle::MpiParticle>();
+            let (msg, _status) = world.process_at_rank(right_rank).receive_vec::<crate::particle::MpiParticle>();
             for p in msg {
                 self.particles.push(crate::particle::Particle::from(p));
             }
@@ -513,7 +599,7 @@ impl Simulation {
         }
         
         if left_rank >= 0 {
-            let (msg, status) = world.process_at_rank(left_rank).receive_vec::<crate::particle::MpiParticle>();
+            let (msg, _status) = world.process_at_rank(left_rank).receive_vec::<crate::particle::MpiParticle>();
             for p in msg {
                 self.particles.push(crate::particle::Particle::from(p));
             }

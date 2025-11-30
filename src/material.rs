@@ -5,16 +5,18 @@ pub struct Material {
     pub density: f32,        // rho
     pub friction_coefficient: f32, // mu
     pub restitution_coefficient: f32, // e
+    pub surface_energy: f32, // gamma
 }
 
 impl Material {
-    pub fn new(youngs_modulus: f32, poissons_ratio: f32, density: f32, friction_coefficient: f32, restitution_coefficient: f32) -> Self {
+    pub fn new(youngs_modulus: f32, poissons_ratio: f32, density: f32, friction_coefficient: f32, restitution_coefficient: f32, surface_energy: f32) -> Self {
         Self {
             youngs_modulus,
             poissons_ratio,
             density,
             friction_coefficient,
             restitution_coefficient,
+            surface_energy,
         }
     }
 }
