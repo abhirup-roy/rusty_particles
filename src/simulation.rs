@@ -216,14 +216,27 @@ impl Simulation {
                 let t_x = p.position + y_x;
                 p.position_residual = (t_x - p.position) - y_x;
                 p.position = t_x;
+
+                // Rotational Integration (Angular Velocity)
+                // I = 2/5 * m * r^2 (Solid Sphere)
+                let inertia = 0.4 * p.mass * p.radius * p.radius;
+                let angular_acc = p.torque / inertia;
+                
+                // Kahan summation for Angular Velocity
+                let dw = 0.5 * angular_acc * dt;
+                let y_w = dw - p.angular_velocity_residual;
+                let t_w = p.angular_velocity + y_w;
+                p.angular_velocity_residual = (t_w - p.angular_velocity) - y_w;
+                p.angular_velocity = t_w;
             }
         });
 
         // 2. Force Calculation
-        // Reset forces (gravity)
+        // Reset forces (gravity) and torque
         let g = Vec3::new(0.0, -9.81, 0.0);
         self.particles.par_iter_mut().for_each(|p| {
             p.acceleration = g;
+            p.torque = Vec3::ZERO;
         });
 
         // Broad-phase
@@ -267,8 +280,9 @@ impl Simulation {
         let contacts = &self.contacts;
         let meshes = &self.meshes;
         
-        let forces: Vec<Vec3> = self.particles.par_iter().enumerate().map(|(i, p)| {
+        let forces: Vec<(Vec3, Vec3)> = self.particles.par_iter().enumerate().map(|(i, p)| {
             let mut f_total = Vec3::ZERO;
+            let mut torque_total = Vec3::ZERO;
             
             // Neighbor search
             let neighbors = grid.get_potential_collisions(p, periodic);
@@ -299,7 +313,22 @@ impl Simulation {
                     let dist = dist_sq.sqrt();
                     let overlap = r_sum - dist;
                     let normal = if dist > 1e-6 { dist_vec / dist } else { Vec3::Y };
-                    let rel_vel = p.velocity - other.velocity;
+                    
+                    // Relative velocity at contact point
+                    // v_rel = (v_a + w_a x r_a) - (v_b + w_b x r_b)
+                    // Contact point is approx halfway along normal?
+                    // Or r_a = -normal * radius_a, r_b = normal * radius_b
+                    // normal points from B to A.
+                    // r_a = -normal * p.radius (vector from center A to contact)
+                    // r_b = normal * other.radius (vector from center B to contact)
+                    
+                    let r_a = -normal * p.radius;
+                    let r_b = normal * other.radius;
+                    
+                    let vel_a = p.velocity + p.angular_velocity.cross(r_a);
+                    let vel_b = other.velocity + other.angular_velocity.cross(r_b);
+                    
+                    let rel_vel = vel_a - vel_b;
                     
                     // Material properties
                     let r_star = effective_radius(p.radius, other.radius);
@@ -308,15 +337,7 @@ impl Simulation {
                     let g_star = effective_shear_modulus(shear_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio), shear_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio));
                     
                     // Contact state
-                    // Key must be sorted to be unique for pair
                     let key = if i < j { (i, j) } else { (j, i) };
-                    // We need to access DashMap.
-                    // Since we are in a read-only pass over particles (conceptually), we can write to DashMap.
-                    // But we are inside a par_iter map.
-                    
-                    // Note: DashMap might deadlock if we try to upgrade/downgrade?
-                    // entry() is safe.
-                    
                     let mut contact = contacts.entry(key).or_insert(Contact::new());
                     contact.age += 1;
                     
@@ -324,16 +345,11 @@ impl Simulation {
                     let f_normal = match self.normal_model {
                         NormalForceModel::Hertzian => hertzian_contact(overlap, normal, rel_vel, e_star, r_star, m_star, p_mat.restitution_coefficient),
                         NormalForceModel::LinearSpringDashpot => {
-                            // Need kn, gn. Derive from material props?
-                            // For now, use some defaults or derived values.
-                            // Kn ~ E * R
                             let kn = e_star * r_star;
-                            // Gn ~ sqrt(m * kn)
                             let gn = 0.5 * (m_star * kn).sqrt();
                             linear_spring_dashpot(overlap, normal, rel_vel, kn, gn)
                         },
                         NormalForceModel::Hysteretic => {
-                             // Placeholder
                              let kn = e_star * r_star;
                              hysteretic_contact(overlap, normal, &mut contact, kn, kn * 1.5)
                         }
@@ -346,31 +362,34 @@ impl Simulation {
                         TangentialForceModel::Mindlin => mindlin_contact(fn_mag, overlap, rel_vel, normal, &mut contact, g_star, r_star, p_mat.friction_coefficient, dt),
                         TangentialForceModel::Coulomb => coulomb_friction(fn_mag, rel_vel, normal, p_mat.friction_coefficient),
                         TangentialForceModel::LinearSpringCoulomb => {
-                             // Kt ~ G * R
                              let kt = g_star * r_star;
                              linear_spring_coulomb(fn_mag, rel_vel, normal, &mut contact, kt, p_mat.friction_coefficient, dt)
                         }
                     };
                     
-                    f_total += f_normal + f_tangent;
+                    let f_contact = f_normal + f_tangent;
+                    f_total += f_contact;
+                    
+                    // Torque = r x F
+                    // Force on A is f_contact.
+                    // Torque on A = r_a x f_contact
+                    torque_total += r_a.cross(f_contact);
                 }
             }
             
             // Particle-Mesh (Walls)
-            // If periodic, we might skip wall collisions on periodic boundaries?
-            // Usually periodic implies no walls on those sides.
-            // But we might have internal meshes.
-            // Let's assume meshes are internal or user handles placement.
-            // However, explicit wall checks (like floor) need to be conditional.
-            
             for mesh in meshes {
                 for triangle in &mesh.triangles {
                     if let Some((penetration, normal)) = triangle.intersect_sphere(p.position, p.radius) {
-                        let rel_vel = p.velocity; // Wall is static
+                        // Wall is static (v=0, w=0)
+                        // Contact point relative to particle center
+                        let r_a = -normal * p.radius;
+                        let vel_a = p.velocity + p.angular_velocity.cross(r_a);
+                        let rel_vel = vel_a; // - 0
                         
                         // Wall material
-                        let r_star = p.radius; // Wall radius is infinite
-                        let m_star = p.mass; // Wall mass infinite
+                        let r_star = p.radius; 
+                        let m_star = p.mass; 
                         let e_star = effective_youngs_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio, w_mat.youngs_modulus, w_mat.poissons_ratio);
                         let g_star = effective_shear_modulus(shear_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio), shear_modulus(w_mat.youngs_modulus, w_mat.poissons_ratio));
                         
@@ -381,17 +400,22 @@ impl Simulation {
                         let fn_mag = f_normal.length();
                         let f_tangent = coulomb_friction(fn_mag, rel_vel, normal, p_mat.friction_coefficient);
                         
-                        f_total += f_normal + f_tangent;
+                        let f_contact = f_normal + f_tangent;
+                        f_total += f_contact;
+                        
+                        // Torque
+                        torque_total += r_a.cross(f_contact);
                     }
                 }
             }
             
-            f_total
+            (f_total, torque_total)
         }).collect();
         
         // Apply forces (only to local particles)
     self.particles.par_iter_mut().take(local_count).enumerate().for_each(|(i, p)| {
-        p.acceleration += forces[i] / p.mass;
+        p.acceleration += forces[i].0 / p.mass;
+        p.torque += forces[i].1;
     });
     
     // Remove ghosts
@@ -406,6 +430,16 @@ impl Simulation {
                 let t_v = p.velocity + y_v;
                 p.velocity_residual = (t_v - p.velocity) - y_v;
                 p.velocity = t_v;
+
+                // Rotational Integration (Second Half)
+                let inertia = 0.4 * p.mass * p.radius * p.radius;
+                let angular_acc = p.torque / inertia;
+                
+                let dw = 0.5 * angular_acc * dt;
+                let y_w = dw - p.angular_velocity_residual;
+                let t_w = p.angular_velocity + y_w;
+                p.angular_velocity_residual = (t_w - p.angular_velocity) - y_w;
+                p.angular_velocity = t_w;
             }
         });
     }
