@@ -1,22 +1,31 @@
+"""
+Verification test for periodic boundary conditions.
+
+Verifies that particles wrap around the simulation domain when periodic boundaries are enabled.
+"""
+
 import random
 import rusty_particles
 import pytest
 
 
-def test_periodic():
+def test_periodic_boundary():
+    """
+    Verifies particle wrapping across periodic boundaries.
+    """
     # Create simulation with small bounds
     # dt, min_x, min_y, min_z, max_x, max_y, max_z, count
     sim = rusty_particles.Simulation.create(0.01, -1.0, -1.0, -1.0, 1.0, 1.0, 1.0, 1)
 
     # Enable periodic boundaries in X
-    sim.set_periodic(False, True, False)
+    sim.set_periodic_boundary(False, True, False)
 
     # Add a particle moving towards +X boundary
     # x, y, z, radius, mass
     sim.add_particle(0.9, 0.0, 0.0, 0.1, 1.0)
 
     # Let's test Y wrapping with gravity.
-    sim.set_periodic(False, True, False)
+    sim.set_periodic_boundary(False, True, False)
 
     # Add particle at top
     particle_count = 100
@@ -39,4 +48,4 @@ def test_periodic():
 
 
 if __name__ == "__main__":
-    test_periodic()
+    test_periodic_boundary()

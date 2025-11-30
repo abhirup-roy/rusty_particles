@@ -34,6 +34,10 @@ fn rusty_particles(_py: Python, m: &PyModule) -> PyResult<()> {
     Ok(())
 }
 
+/// Python wrapper for the Rust simulation engine.
+///
+/// This class exposes the core simulation functionality to Python, allowing
+/// users to create, configure, and run particle simulations.
 #[pyclass(name = "Simulation")]
 struct PySimulation {
     inner: Box<simulation::Simulation>,
@@ -41,6 +45,14 @@ struct PySimulation {
 
 #[pymethods]
 impl PySimulation {
+    /// Creates a new simulation instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `dt` - The time step for the simulation (seconds).
+    /// * `min_x`, `min_y`, `min_z` - The minimum coordinates of the simulation bounds.
+    /// * `max_x`, `max_y`, `max_z` - The maximum coordinates of the simulation bounds.
+    /// * `particle_count` - The initial capacity for particles.
     #[staticmethod]
     fn create(dt: f32, min_x: f32, min_y: f32, min_z: f32, max_x: f32, max_y: f32, max_z: f32, particle_count: usize) -> Self {
         let min = Vec3::new(min_x, min_y, min_z);
@@ -53,23 +65,47 @@ impl PySimulation {
         }
     }
 
+    /// Adds a particle to the simulation.
+    ///
+    /// # Arguments
+    ///
+    /// * `x`, `y`, `z` - The position of the particle.
+    /// * `radius` - The radius of the particle.
+    /// * `mass` - The mass of the particle.
+    /// * `fixed` - Whether the particle is fixed in space (immovable).
     #[pyo3(signature = (x, y, z, radius, mass, fixed=false))]
     fn add_particle(&mut self, x: f32, y: f32, z: f32, radius: f32, mass: f32, fixed: bool) {
         let pos = Vec3::new(x, y, z);
         self.inner.add_particle(pos, radius, mass, fixed);
     }
 
+    /// Adds a mesh from an STL file to the simulation.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to the STL file.
     fn add_mesh(&mut self, path: String) -> PyResult<()> {
         let mesh = mesh::Mesh::load_stl(&path).map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
         self.inner.add_mesh(mesh);
         Ok(())
     }
 
+    /// Advances the simulation by one time step.
     fn step(&mut self) {
         self.inner.step();
     }
 
     #[pyo3(signature = (youngs_modulus, poissons_ratio, density, friction_coefficient, restitution_coefficient, surface_energy=0.0))]
+    /// Sets the material properties for all particles.
+    ///
+    /// # Arguments
+    ///
+    /// * `youngs_modulus` - Young's modulus (Pa).
+    /// * `poissons_ratio` - Poisson's ratio.
+    /// * `density` - Density (kg/m^3).
+    /// * `friction_coefficient` - Coefficient of friction.
+    /// * `restitution_coefficient` - Coefficient of restitution (0.0 to 1.0).
+    /// * `surface_energy` - Surface energy (J/m^2), used for JKR/sJKR models.
     fn set_particle_material(&mut self, youngs_modulus: f32, poissons_ratio: f32, density: f32, friction_coefficient: f32, restitution_coefficient: f32, surface_energy: f32) {
         self.inner.particle_material = material::Material::new(youngs_modulus, poissons_ratio, density, friction_coefficient, restitution_coefficient, surface_energy);
         // Also update existing particles? 
@@ -92,10 +128,21 @@ impl PySimulation {
         self.inner.wall_material = material::Material::new(youngs_modulus, poissons_ratio, density, friction_coefficient, restitution_coefficient, surface_energy);
     }
 
-    fn set_periodic(&mut self, x: bool, y: bool, z: bool) {
+    /// Enables or disables periodic boundary conditions.
+    ///
+    /// # Arguments
+    ///
+    /// * `x` - Enable periodicity in X direction.
+    /// * `y` - Enable periodicity in Y direction.
+    /// * `z` - Enable periodicity in Z direction.
+    fn set_periodic_boundary(&mut self, x: bool, y: bool, z: bool) {
         self.inner.periodic = [x, y, z];
     }
 
+    /// Enables GPU acceleration for the simulation.
+    ///
+    /// This method initializes the GPU resources and transfers particle data to the GPU.
+    /// Requires a compatible GPU (Metal on MacOS, Vulkan/DX12 on Windows/Linux).
     fn enable_gpu(&mut self) -> PyResult<()> {
         self.inner.enable_gpu().map_err(|e| PyRuntimeError::new_err(e))
     }
@@ -104,6 +151,12 @@ impl PySimulation {
         self.inner.init_mpi();
     }
 
+    /// Sets the contact force models.
+    ///
+    /// # Arguments
+    ///
+    /// * `normal_model` - The normal force model ("linear", "hertzian", "jkr", "sjkr").
+    /// * `tangential_model` - The tangential force model ("coulomb").
     fn set_contact_models(&mut self, normal: String, tangential: String) -> PyResult<()> {
         let normal_model = match normal.to_lowercase().as_str() {
             "hertz" | "hertzian" => physics::NormalForceModel::Hertzian,
@@ -141,6 +194,11 @@ impl PySimulation {
         pb.finish_with_message("Simulation complete");
     }
 
+    /// Writes the current simulation state to a VTK file.
+    ///
+    /// # Arguments
+    ///
+    /// * `filename` - The path to the output file.
     fn write_vtk(&mut self, filename: String) -> PyResult<()> {
         // Sync before writing
         self.inner.sync_particles();
@@ -148,23 +206,42 @@ impl PySimulation {
         Ok(())
     }
     
-    fn particle_count(&self) -> usize {
+    /// Returns the total number of particles in the simulation.
+    fn get_particle_count(&self) -> usize {
         self.inner.particles.len()
     }
 
-    fn get_particle_position(&self, index: usize) -> PyResult<(f32, f32, f32)> {
-        if index >= self.inner.particles.len() {
+    /// Retrieves the position of a particle.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The ID of the particle.
+    ///
+    /// # Returns
+    ///
+    /// A tuple `(x, y, z)` containing the particle's position.
+    fn get_particle_position(&self, id: usize) -> PyResult<(f32, f32, f32)> {
+        if id >= self.inner.particles.len() {
             return Err(PyErr::new::<pyo3::exceptions::PyIndexError, _>("Particle index out of bounds"));
         }
-        let p = &self.inner.particles[index];
+        let p = &self.inner.particles[id];
         Ok((p.position.x, p.position.y, p.position.z))
     }
 
-    fn get_particle_velocity(&self, index: usize) -> PyResult<(f32, f32, f32)> {
-        if index >= self.inner.particles.len() {
+    /// Retrieves the velocity of a particle.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The ID of the particle.
+    ///
+    /// # Returns
+    ///
+    /// A tuple `(vx, vy, vz)` containing the particle's velocity.
+    fn get_particle_velocity(&self, id: usize) -> PyResult<(f32, f32, f32)> {
+        if id >= self.inner.particles.len() {
             return Err(PyErr::new::<pyo3::exceptions::PyIndexError, _>("Particle index out of bounds"));
         }
-        let p = &self.inner.particles[index];
+        let p = &self.inner.particles[id];
         Ok((p.velocity.x, p.velocity.y, p.velocity.z))
     }
 
@@ -176,11 +253,17 @@ impl PySimulation {
         Ok((p.angular_velocity.x, p.angular_velocity.y, p.angular_velocity.z))
     }
 
-    fn set_particle_velocity(&mut self, index: usize, x: f32, y: f32, z: f32) -> PyResult<()> {
-        if index >= self.inner.particles.len() {
+    /// Sets the velocity of a particle.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The ID of the particle.
+    /// * `vx`, `vy`, `vz` - The new velocity components.
+    fn set_particle_velocity(&mut self, id: usize, vx: f32, vy: f32, vz: f32) -> PyResult<()> {
+        if id >= self.inner.particles.len() {
             return Err(PyErr::new::<pyo3::exceptions::PyIndexError, _>("Particle index out of bounds"));
         }
-        self.inner.particles[index].velocity = Vec3::new(x, y, z);
+        self.inner.particles[id].velocity = Vec3::new(vx, vy, vz);
         Ok(())
     }
 

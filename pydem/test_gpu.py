@@ -1,3 +1,10 @@
+"""
+Verification test for GPU acceleration.
+
+This script initializes a simulation with GPU support enabled and verifies
+that particles can be added and the simulation stepped without errors.
+"""
+
 import rusty_particles
 import pytest
 import time

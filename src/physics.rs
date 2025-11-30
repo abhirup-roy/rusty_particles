@@ -1,19 +1,29 @@
 use glam::Vec3;
 use crate::contact::Contact;
 
-#[derive(Clone, Copy, Debug)]
+/// Available normal force models.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NormalForceModel {
+    /// Linear Spring-Dashpot model.
     LinearSpringDashpot,
+    /// Hertzian elastic contact model.
     Hertzian,
+    /// Hysteretic linear spring model (simple plasticity).
     Hysteretic,
+    /// Johnson-Kendall-Roberts (JKR) adhesion model.
     JKR,
+    /// Simplified JKR (sJKR) explicit approximation.
     SimplifiedJKR,
 }
 
-#[derive(Clone, Copy, Debug)]
+/// Available tangential force models.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TangentialForceModel {
+    /// Coulomb friction model.
     Coulomb,
+    /// Linear Spring-Coulomb model (simplified).
     LinearSpringCoulomb,
+    /// Mindlin-Deresiewicz no-slip model.
     Mindlin,
 }
 
@@ -27,6 +37,15 @@ pub struct InteractionParams {
 }
 
 // Linear Spring-Dashpot (Cundall & Strack)
+/// Computes the normal force using a Linear Spring-Dashpot model.
+///
+/// # Arguments
+///
+/// * `overlap` - The overlap distance between particles (positive for penetration).
+/// * `normal` - The contact normal vector.
+/// * `relative_velocity` - The relative velocity vector.
+/// * `kn` - Normal stiffness.
+/// * `gn` - Normal damping coefficient.
 pub fn linear_spring_dashpot(
     overlap: f32,
     normal: Vec3,
@@ -51,6 +70,19 @@ pub fn linear_spring_dashpot(
 }
 
 // Hertzian Contact
+/// Computes the normal force using the Hertzian contact model.
+///
+/// Includes non-linear elasticity and damping.
+///
+/// # Arguments
+///
+/// * `overlap` - The overlap distance.
+/// * `normal` - The contact normal.
+/// * `relative_velocity` - The relative velocity.
+/// * `e_star` - Effective Young's modulus.
+/// * `r_star` - Effective radius.
+/// * `m_star` - Effective mass.
+/// * `restitution_coefficient` - Coefficient of restitution.
 pub fn hertzian_contact(
     overlap: f32,
     normal: Vec3,
@@ -58,7 +90,7 @@ pub fn hertzian_contact(
     e_star: f32,
     r_star: f32,
     m_star: f32,
-    restitution_coeff: f32,
+    restitution_coefficient: f32,
 ) -> Vec3 {
     if overlap <= 0.0 {
         return Vec3::ZERO;
@@ -76,7 +108,7 @@ pub fn hertzian_contact(
     // Usually simplified or derived.
     // Tsuji et al (1992): F = K * delta^1.5 + C * delta^0.25 * v_n
     
-    let ln_e = restitution_coeff.ln();
+    let ln_e = restitution_coefficient.ln();
     let beta = ln_e / (ln_e.powi(2) + std::f32::consts::PI.powi(2)).sqrt();
     
     // Stiffness at this overlap
@@ -186,13 +218,19 @@ pub fn compute_jkr_force(
     force_mag * normal
 }
 
-// Simplified JKR (sJKR) / Cohesive Hertz
-// Explicit approximation with hysteresis.
-// F_pull = 1.5 * pi * gamma * R*
-// delta_c = -sqrt(3 * pi^2 * gamma^2 * R* / E*^2)
-// Loading: Hertzian
-// Unloading: Hertzian - F_pull
-// Detachment: delta < delta_c
+/// Computes the normal force using the Simplified JKR (sJKR) model.
+///
+/// An explicit, non-iterative approximation of JKR.
+/// Uses a "cohesive Hertz" approach with hysteresis based on relative velocity.
+///
+/// # Arguments
+///
+/// * `overlap` - The overlap distance.
+/// * `normal` - The contact normal.
+/// * `relative_velocity` - The relative velocity.
+/// * `e_star` - Effective Young's modulus.
+/// * `r_star` - Effective radius.
+/// * `surface_energy` - Surface energy (gamma).
 pub fn compute_sjkr_force(
     overlap: f32,
     normal: Vec3,

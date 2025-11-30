@@ -1,3 +1,9 @@
+"""
+Verification test for multithreading.
+
+Verifies that the simulation runs correctly with multiple threads enabled.
+"""
+
 import rusty_particles
 import time
 import pytest

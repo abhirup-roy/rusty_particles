@@ -1,9 +1,19 @@
+"""
+Analytical verification test for rotational motion.
+
+Verifies the simulation against analytical solutions for a ball rolling down an inclined plane.
+Checks both translational and rotational velocity.
+"""
+
 import rusty_particles
-import pytest
 import numpy as np
+import pytest
 
 
-def test_ball_rolling_on_plate():
+def test_ball_rolling_down_incline():
+    """
+    Verifies the motion of a ball rolling down an inclined plane without slipping.
+    """
     # Parameters
     radius = 0.05
     mass = 1.0
@@ -164,4 +174,4 @@ def test_ball_rolling_on_plate():
 
 
 if __name__ == "__main__":
-    test_ball_rolling_on_plate()
+    test_ball_rolling_down_incline()

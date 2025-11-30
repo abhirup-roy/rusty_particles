@@ -10,31 +10,55 @@ use dashmap::DashMap;
 use mpi::traits::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// The core simulation engine.
+///
+/// Manages particles, the grid, forces, and time integration.
 pub struct Simulation {
+    /// The list of particles in the simulation.
     pub particles: Vec<Particle>,
+    /// The spatial grid for broad-phase collision detection.
     pub grid: Grid,
+    /// The time step (seconds).
     pub dt: f32,
+    /// The minimum bounds of the simulation domain.
     pub bounds_min: Vec3,
+    /// The maximum bounds of the simulation domain.
     pub bounds_max: Vec3,
+    /// Static meshes (e.g., boundaries).
     pub meshes: Vec<Mesh>,
+    /// Active contacts between particles.
     pub contacts: DashMap<(usize, usize), Contact>,
-    pub material: Material, // Global material for now, or per particle?
-    // User asked for "specify the young's modulus and density of walls and particles seperately"
-    // So we need materials for particles and walls.
-    // Let's assume all particles share a material, and walls share a material for now.
+    /// Material properties for particles.
     pub particle_material: Material,
+    /// Material properties for walls.
     pub wall_material: Material,
+    /// Periodic boundary flags [x, y, z].
     pub periodic: [bool; 3],
+    /// GPU simulation state (if enabled).
     pub gpu_sim: Option<gpu::GpuSimulation>,
+    /// The normal force model.
     pub normal_model: physics::NormalForceModel,
+    /// The tangential force model.
     pub tangential_model: physics::TangentialForceModel,
+    /// MPI rank (for parallel execution).
     pub rank: i32,
+    /// Total number of MPI processes.
     pub world_size: i32,
+    /// MPI universe.
     pub universe: Option<mpi::environment::Universe>,
+    /// Ghost particles for boundary communication.
     pub ghosts: Vec<Particle>,
 }
 
 impl Simulation {
+    /// Creates a new simulation.
+    ///
+    /// # Arguments
+    ///
+    /// * `dt` - Time step (s).
+    /// * `bounds_min` - Minimum domain coordinates.
+    /// * `bounds_max` - Maximum domain coordinates.
+    /// * `particle_count` - Initial particle capacity.
     pub fn new(dt: f32, bounds_min: Vec3, bounds_max: Vec3, particle_count: usize) -> Self {
         let particles = Vec::with_capacity(particle_count);
         // Heuristic for cell size: 2 * max_radius. Let's assume max_radius = 0.1 for now.
@@ -53,7 +77,6 @@ impl Simulation {
             bounds_max,
             meshes: Vec::new(),
             contacts: DashMap::new(),
-            material: particle_material, // Deprecated
             particle_material,
             wall_material,
             periodic: [false; 3],
@@ -122,6 +145,14 @@ impl Simulation {
         Ok(())
     }
 
+    /// Advances the simulation by one time step.
+    ///
+    /// This method orchestrates the entire simulation loop:
+    /// 1. Broad-phase collision detection (Grid).
+    /// 2. Force calculation (Particle-Particle, Particle-Wall, Particle-Mesh).
+    /// 3. Time integration (Symplectic Euler).
+    /// 4. Boundary handling (Periodic/Reflective).
+    /// 5. MPI communication (if parallel).
     pub fn step(&mut self) {
         if let Some(gpu_sim) = &mut self.gpu_sim {
             gpu_sim.step();

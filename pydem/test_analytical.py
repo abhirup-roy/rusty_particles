@@ -1,9 +1,19 @@
+"""
+Analytical verification test for particle motion.
+
+Verifies the simulation against analytical solutions for:
+1. Free fall under gravity.
+2. Energy conservation during elastic collision.
+"""
+
 import rusty_particles
 import numpy as np
-import time
 
 
 def test_free_fall():
+    """
+    Verifies that a particle falls under gravity according to h = 0.5 * g * t^2.
+    """
     print("\n--- Test 1: Free Fall (Integrator Validation) ---")
     # Parameters
     dt = 1e-6
@@ -19,7 +29,6 @@ def test_free_fall():
     sim.add_particle(0.0, y0, 0.0, 0.1, 1.0)
 
     # Run
-    steps = int(total_time / dt)
     sim.run(total_time)
 
     # Get final position
