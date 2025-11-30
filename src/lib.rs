@@ -111,6 +111,7 @@ impl PySimulation {
             "linear" | "spring_dashpot" => physics::NormalForceModel::LinearSpringDashpot,
             "hysteretic" => physics::NormalForceModel::Hysteretic,
             "jkr" => physics::NormalForceModel::JKR,
+            "sjkr" | "simplified_jkr" => physics::NormalForceModel::SimplifiedJKR,
             _ => return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid normal force model")),
         };
 

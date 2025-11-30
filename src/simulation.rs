@@ -315,7 +315,7 @@ impl Simulation {
                 
                 // For JKR, we need to check for contact even if slightly separated (necking).
                 // We add a margin.
-                let margin = if matches!(self.normal_model, NormalForceModel::JKR) {
+                let margin = if matches!(self.normal_model, NormalForceModel::JKR | NormalForceModel::SimplifiedJKR) {
                     r_sum * 0.5 // Allow up to 50% radius separation? Maybe too much.
                     // Pull-off distance is usually small.
                 } else {
@@ -402,6 +402,10 @@ impl Simulation {
                             // If different materials, maybe average?
                             let gamma = (p_mat.surface_energy + p_mat.surface_energy) * 0.5;
                             compute_jkr_force(overlap, normal, rel_vel, e_star, r_star, gamma)
+                        },
+                        NormalForceModel::SimplifiedJKR => {
+                            let gamma = (p_mat.surface_energy + p_mat.surface_energy) * 0.5;
+                            compute_sjkr_force(overlap, normal, rel_vel, e_star, r_star, gamma)
                         }
                     };
                     
@@ -468,6 +472,10 @@ impl Simulation {
                             NormalForceModel::JKR => {
                                 let gamma = (p_mat.surface_energy + w_mat.surface_energy) * 0.5;
                                 compute_jkr_force(penetration, normal, rel_vel, e_star, r_star, gamma)
+                            },
+                            NormalForceModel::SimplifiedJKR => {
+                                let gamma = (p_mat.surface_energy + w_mat.surface_energy) * 0.5;
+                                compute_sjkr_force(penetration, normal, rel_vel, e_star, r_star, gamma)
                             }
                         };
                         

@@ -7,6 +7,7 @@ pub enum NormalForceModel {
     Hertzian,
     Hysteretic,
     JKR,
+    SimplifiedJKR,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -190,6 +191,106 @@ pub fn compute_jkr_force(
     }
     
     force_mag * normal
+}
+
+// Simplified JKR (sJKR) / Cohesive Hertz
+// Explicit approximation with hysteresis.
+// F_pull = 1.5 * pi * gamma * R*
+// delta_c = -sqrt(3 * pi^2 * gamma^2 * R* / E*^2)
+// Loading: Hertzian
+// Unloading: Hertzian - F_pull
+// Detachment: delta < delta_c
+pub fn compute_sjkr_force(
+    overlap: f32,
+    normal: Vec3,
+    relative_velocity: Vec3,
+    e_star: f32,
+    r_star: f32,
+    surface_energy: f32,
+) -> Vec3 {
+    let gamma = surface_energy;
+    if gamma <= 0.0 {
+        // Fallback to Hertzian
+        let kn = 4.0 / 3.0 * e_star * r_star.sqrt();
+        let f_mag = if overlap > 0.0 { kn * overlap.powf(1.5) } else { 0.0 };
+        return f_mag * normal;
+    }
+
+    // Critical pull-off parameters
+    // F_pull_magnitude = 1.5 * pi * gamma * R*
+    let f_pull = 1.5 * std::f32::consts::PI * gamma * r_star;
+    
+    // delta_c = -sqrt(3 * pi^2 * gamma^2 * R* / E*^2)
+    // term inside sqrt: 3 * pi^2 * gamma^2 * R* / E*^2
+    let term = 3.0 * std::f32::consts::PI.powi(2) * gamma.powi(2) * r_star / e_star.powi(2);
+    let delta_c = -term.sqrt();
+    
+    // Check detachment
+    if overlap < delta_c {
+        return Vec3::ZERO;
+    }
+    
+    // Determine state (Loading vs Unloading)
+    // We use relative velocity along normal.
+    // v_n = v_rel . n
+    // If v_n < 0, particles are approaching (Loading).
+    // If v_n > 0, particles are separating (Unloading).
+    // Note: relative_velocity is v_a - v_b. 
+    // If particles move towards each other, v_a moves to right, v_b to left?
+    // Let's check convention in simulation.rs:
+    // let rel_vel = p.velocity - other.velocity ...
+    // let normal = dist_vec / dist; (points from other to p)
+    // vn = rel_vel.dot(normal)
+    // If p moves towards other (opposing normal), vn < 0.
+    // So vn < 0 is approaching (Loading).
+    // vn > 0 is separating (Unloading).
+    
+    let vn = relative_velocity.dot(normal);
+    let is_unloading = vn > 0.0;
+    
+    // Coherency parameter (0 for loading, 1 for unloading)
+    // We can also use a smooth transition if needed, but sJKR usually implies a switch.
+    let coherency = if is_unloading { 1.0 } else { 0.0 };
+    
+    // Hertzian force part
+    // F_Hertz = 4/3 * E* * sqrt(R*) * delta^1.5
+    // Note: delta can be negative in sJKR (necking).
+    // Standard Hertz is 0 for delta < 0.
+    // However, for sJKR unloading, we extend the curve?
+    // "F_n = F_Hertz - F_pull_magnitude"
+    // If delta < 0, F_Hertz is undefined (complex) or 0?
+    // Usually sJKR assumes contact area exists until delta_c.
+    // But Hertzian formula a = sqrt(R*delta) implies delta > 0.
+    // The "Cohesive Hertz" model often uses:
+    // F = K * delta^1.5 - F_pull (for unloading)
+    // But if delta < 0, this doesn't work directly.
+    // Maybe the approximation is:
+    // F = F_Hertz(delta) - coherency * F_pull
+    // And for delta < 0, F_Hertz is 0, so F = -F_pull.
+    // This gives a constant adhesive force for negative overlap?
+    // Or does it follow a different curve?
+    // The user said: "F_n = F_Hertz - F_pull_magnitude ... clamped to 0 if delta is negative"
+    // So F_Hertz is 0 if delta < 0.
+    // Thus for delta < 0 (but > delta_c), F = -F_pull.
+    // This creates a constant pull-off force region.
+    
+    let f_hertz = if overlap > 0.0 {
+        4.0 / 3.0 * e_star * r_star.sqrt() * overlap.powf(1.5)
+    } else {
+        0.0
+    };
+    
+    let f_adhesion = coherency * f_pull;
+    
+    let total_force = f_hertz - f_adhesion;
+    
+    // Ensure we don't return negative force if we are loading?
+    // Loading: F = F_Hertz. (No adhesion).
+    // Unloading: F = F_Hertz - F_pull.
+    
+    // What if total_force is negative during unloading? That's expected (attraction).
+    
+    total_force * normal
 }
 
 // Hysteretic Linear Spring (Walton & Braun)
