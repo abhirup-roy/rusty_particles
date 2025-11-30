@@ -70,8 +70,9 @@ impl PySimulation {
         self.inner.step();
     }
 
-    fn set_particle_material(&mut self, youngs_modulus: f32, poissons_ratio: f32, density: f32, friction_coefficient: f32, restitution_coefficient: f32) {
-        self.inner.particle_material = material::Material::new(youngs_modulus, poissons_ratio, density, friction_coefficient, restitution_coefficient);
+    #[pyo3(signature = (youngs_modulus, poissons_ratio, density, friction_coefficient, restitution_coefficient, surface_energy=0.0))]
+    fn set_particle_material(&mut self, youngs_modulus: f32, poissons_ratio: f32, density: f32, friction_coefficient: f32, restitution_coefficient: f32, surface_energy: f32) {
+        self.inner.particle_material = material::Material::new(youngs_modulus, poissons_ratio, density, friction_coefficient, restitution_coefficient, surface_energy);
         // Also update existing particles? 
         // For now, density is used for mass calculation during creation, but mass is stored on particle.
         // If we change density, we might want to update mass? 
@@ -87,8 +88,9 @@ impl PySimulation {
         // Let's keep it consistent.
     }
 
-    fn set_wall_material(&mut self, youngs_modulus: f32, poissons_ratio: f32, density: f32, friction_coefficient: f32, restitution_coefficient: f32) {
-        self.inner.wall_material = material::Material::new(youngs_modulus, poissons_ratio, density, friction_coefficient, restitution_coefficient);
+    #[pyo3(signature = (youngs_modulus, poissons_ratio, density, friction_coefficient, restitution_coefficient, surface_energy=0.0))]
+    fn set_wall_material(&mut self, youngs_modulus: f32, poissons_ratio: f32, density: f32, friction_coefficient: f32, restitution_coefficient: f32, surface_energy: f32) {
+        self.inner.wall_material = material::Material::new(youngs_modulus, poissons_ratio, density, friction_coefficient, restitution_coefficient, surface_energy);
     }
 
     fn set_periodic(&mut self, x: bool, y: bool, z: bool) {
@@ -108,6 +110,7 @@ impl PySimulation {
             "hertz" | "hertzian" => physics::NormalForceModel::Hertzian,
             "linear" | "spring_dashpot" => physics::NormalForceModel::LinearSpringDashpot,
             "hysteretic" => physics::NormalForceModel::Hysteretic,
+            "jkr" => physics::NormalForceModel::JKR,
             _ => return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid normal force model")),
         };
 

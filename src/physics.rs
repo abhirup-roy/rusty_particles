@@ -6,6 +6,7 @@ pub enum NormalForceModel {
     LinearSpringDashpot,
     Hertzian,
     Hysteretic,
+    JKR,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -99,6 +100,96 @@ pub fn hertzian_contact(
     
     let total_force = (force_elastic + force_damping).max(0.0);
     total_force * normal
+}
+
+// JKR Contact Model
+pub fn compute_jkr_force(
+    overlap: f32,
+    normal: Vec3,
+    _relative_velocity: Vec3, // Damping not specified in JKR, usually added separately
+    e_star: f32,
+    r_star: f32,
+    surface_energy: f32,
+) -> Vec3 {
+    // JKR equations provided by user:
+    // delta = a^2 / R* - sqrt(8 * pi * gamma * a / E*)
+    // F = 4 * E* * a^3 / (3 * R*) - sqrt(8 * pi * gamma * E* * a^3)
+    // Pull-off force: F_pull = -2/3 * pi * gamma * R*
+    
+    // We need to solve for a (contact radius) given overlap (delta).
+    // Equation: f(a) = a^2 / R* - sqrt(8 * pi * gamma * a / E*) - delta = 0
+    // Let C = 8 * pi * gamma / E*
+    // f(a) = a^2 / R* - sqrt(C * a) - delta = 0
+    // f'(a) = 2*a / R* - 0.5 * sqrt(C) * a^(-1/2)
+    
+    // Newton-Raphson iteration
+    // Initial guess: Hertzian a0 = sqrt(R* * delta) (if delta > 0)
+    // If delta <= 0, we need a better guess. JKR allows contact for negative overlap.
+    // For delta < 0, a is small but positive.
+    
+    let gamma = surface_energy;
+    if gamma <= 0.0 {
+        // Fallback to Hertzian if no adhesion
+        // We don't have mass here for damping, so just elastic part
+        let kn = 4.0 / 3.0 * e_star * r_star.sqrt();
+        let f_mag = if overlap > 0.0 { kn * overlap.powf(1.5) } else { 0.0 };
+        return f_mag * normal;
+    }
+
+    let c_val = 8.0 * std::f32::consts::PI * gamma / e_star;
+    let sqrt_c = c_val.sqrt();
+    
+    let mut a = if overlap > 0.0 {
+        (r_star * overlap).sqrt()
+    } else {
+        // Safe guess for negative overlap
+        r_star * 0.5
+    };
+    
+    // Iteration
+    for _ in 0..20 {
+        if a <= 0.0 { a = 1e-9; } 
+        
+        let term_sqrt = (c_val * a).sqrt();
+        let f_val = a * a / r_star - term_sqrt - overlap;
+        let df_val = 2.0 * a / r_star - 0.5 * sqrt_c / a.sqrt();
+        
+        if df_val.abs() < 1e-9 { break; }
+        
+        let delta_a = f_val / df_val;
+        let max_step = a * 0.5;
+        let step = delta_a.clamp(-max_step, max_step);
+        a -= step;
+        
+        if step.abs() < 1e-6 * r_star { break; }
+    }
+    
+    // Check convergence
+    let term_sqrt = (c_val * a).sqrt();
+    let f_val = a * a / r_star - term_sqrt - overlap;
+    if f_val.abs() > 1e-3 * r_star {
+        // No root found (likely separated beyond pull-off)
+        return Vec3::ZERO;
+    }
+
+    if a <= 0.0 {
+        return Vec3::ZERO;
+    }
+    
+    // Calculate Force
+    let term1 = 4.0 * e_star * a.powi(3) / (3.0 * r_star);
+    let term2 = (8.0 * std::f32::consts::PI * gamma * e_star * a.powi(3)).sqrt();
+    
+    let force_mag = term1 - term2;
+    
+    // Check pull-off limit
+    let f_pull = -2.0 / 3.0 * std::f32::consts::PI * gamma * r_star;
+    
+    if force_mag < f_pull {
+        return Vec3::ZERO;
+    }
+    
+    force_mag * normal
 }
 
 // Hysteretic Linear Spring (Walton & Braun)

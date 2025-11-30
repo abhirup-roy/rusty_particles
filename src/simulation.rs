@@ -43,8 +43,8 @@ impl Simulation {
         let grid = Grid::new(1.0, bounds_min, bounds_max); // Cell size will be updated
         
         // Default materials
-        let particle_material = Material::new(1e7, 0.3, 2500.0, 0.5, 0.5);
-        let wall_material = Material::new(1e9, 0.3, 7800.0, 0.5, 0.5);
+        let particle_material = Material::new(1e7, 0.3, 2500.0, 0.5, 0.5, 0.0);
+        let wall_material = Material::new(1e9, 0.3, 7800.0, 0.5, 0.5, 0.0);
 
         Self {
             particles,
@@ -313,7 +313,18 @@ impl Simulation {
                 let dist_sq = dist_vec.length_squared();
                 let r_sum = p.radius + other.radius;
                 
-                if dist_sq < r_sum * r_sum {
+                // For JKR, we need to check for contact even if slightly separated (necking).
+                // We add a margin.
+                let margin = if matches!(self.normal_model, NormalForceModel::JKR) {
+                    r_sum * 0.5 // Allow up to 50% radius separation? Maybe too much.
+                    // Pull-off distance is usually small.
+                } else {
+                    0.0
+                };
+                
+                let cutoff = r_sum + margin;
+                
+                if dist_sq < cutoff * cutoff {
                     let dist = dist_sq.sqrt();
                     let overlap = r_sum - dist;
                     
@@ -368,6 +379,29 @@ impl Simulation {
                         NormalForceModel::Hysteretic => {
                              let kn = e_star * r_star;
                              hysteretic_contact(overlap, normal, &mut contact, kn, kn * 1.5)
+                        },
+                        NormalForceModel::JKR => {
+                            // Use effective surface energy?
+                            // Usually gamma = sqrt(gamma1 * gamma2) or similar.
+                            // Let's assume particle material gamma for P-P.
+                            // Or average?
+                            // JKR usually defines W = gamma1 + gamma2 - gamma12.
+                            // For identical materials W = 2 * gamma.
+                            // The formula uses gamma as "surface energy" or "work of adhesion"?
+                            // User said "gamma: Surface energy (adhesion work)".
+                            // If it's work of adhesion, we should combine.
+                            // Let's assume the material property is surface energy per area.
+                            // Work of adhesion W = 2 * gamma (for same material).
+                            // The user's formula uses "gamma".
+                            // "F_pull = -2/3 pi gamma R*".
+                            // Standard JKR pull-off is -1.5 pi W R*.
+                            // If user's gamma is W, then -1.5 pi gamma R*.
+                            // User said -2/3 pi gamma R*.
+                            // This matches DMT pull-off if gamma is W? No, DMT is -2 pi R W.
+                            // Let's just pass the material's gamma directly as requested.
+                            // If different materials, maybe average?
+                            let gamma = (p_mat.surface_energy + p_mat.surface_energy) * 0.5;
+                            compute_jkr_force(overlap, normal, rel_vel, e_star, r_star, gamma)
                         }
                     };
                     
@@ -416,8 +450,26 @@ impl Simulation {
                         let e_star = effective_youngs_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio, w_mat.youngs_modulus, w_mat.poissons_ratio);
                         let g_star = effective_shear_modulus(shear_modulus(p_mat.youngs_modulus, p_mat.poissons_ratio), shear_modulus(w_mat.youngs_modulus, w_mat.poissons_ratio));
                         
-                        // Hertzian normal force
-                        let f_normal = hertzian_contact(penetration, normal, rel_vel, e_star, r_star, m_star, p_mat.restitution_coefficient);
+                        // Normal force
+                        let f_normal = match self.normal_model {
+                            NormalForceModel::Hertzian => hertzian_contact(penetration, normal, rel_vel, e_star, r_star, m_star, p_mat.restitution_coefficient),
+                            NormalForceModel::LinearSpringDashpot => {
+                                let kn = e_star * r_star;
+                                let gn = 0.5 * (m_star * kn).sqrt();
+                                linear_spring_dashpot(penetration, normal, rel_vel, kn, gn)
+                            },
+                            NormalForceModel::Hysteretic => {
+                                // Placeholder
+                                let kn = e_star * r_star;
+                                // We don't have contact state for walls easily yet.
+                                // Fallback to linear
+                                linear_spring_dashpot(penetration, normal, rel_vel, kn, 0.0)
+                            },
+                            NormalForceModel::JKR => {
+                                let gamma = (p_mat.surface_energy + w_mat.surface_energy) * 0.5;
+                                compute_jkr_force(penetration, normal, rel_vel, e_star, r_star, gamma)
+                            }
+                        };
                         
                         // Simple Coulomb for wall
                         let fn_mag = f_normal.length();
