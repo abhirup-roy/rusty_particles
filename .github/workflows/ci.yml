@@ -50,7 +50,9 @@ jobs:
     #   run: cargo test --verbose
 
     - name: Build and Install Python Package
-      run: maturin develop --features extension-module
+      run: |
+        maturin build --features extension-module --out dist
+        pip install dist/*.whl
 
     - name: Run Python Tests
       run: pytest pydem/
