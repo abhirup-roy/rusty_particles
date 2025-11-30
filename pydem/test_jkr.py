@@ -1,8 +1,17 @@
+"""
+Verification test for the JKR adhesion model.
+
+Verifies the pull-off force against the theoretical value for JKR contact.
+"""
+
 import rusty_particles
 import numpy as np
 
 
 def test_jkr_adhesion():
+    """
+    Verifies that the JKR model produces the correct pull-off force.
+    """
     # Parameters
     radius = 0.005  # 5mm
     mass = 1.0  # Arbitrary

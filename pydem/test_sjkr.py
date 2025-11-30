@@ -1,8 +1,18 @@
+"""
+Verification test for the Simplified JKR (sJKR) model.
+
+This script verifies the explicit force-displacement behavior of the sJKR model,
+including Hertzian loading, adhesive unloading, and the pull-off force limit.
+"""
+
 import rusty_particles
 import numpy as np
 
 
 def test_sjkr_adhesion():
+    """
+    Verifies that the sJKR model produces the correct pull-off force.
+    """
     # Parameters
     radius = 0.005  # 5mm
     mass = 1.0  # Arbitrary

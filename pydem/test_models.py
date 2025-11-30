@@ -1,8 +1,18 @@
+"""
+Verification test for contact model selection.
+
+Verifies that the simulation correctly accepts valid contact model names
+and rejects invalid ones.
+"""
+
 import rusty_particles
 import pytest
 
 
-def test_models():
+def test_contact_models():
+    """
+    Tests setting various contact models (Hertzian, JKR, sJKR, etc.).
+    """
     print("Testing Configurable Contact Models...")
 
     # Create simulation
@@ -24,4 +34,4 @@ def test_models():
 
 
 if __name__ == "__main__":
-    test_models()
+    test_contact_models()
