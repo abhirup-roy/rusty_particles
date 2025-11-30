@@ -1,0 +1,43 @@
+site_name: Rusty Particles
+site_description: High-performance DEM simulation engine in Rust with Python bindings.
+site_author: Abhirup Roy
+repo_url: https://github.com/yourusername/rusty-particles
+repo_name: rusty-particles
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - content.code.copy
+  palette:
+    - scheme: default
+      primary: teal
+      accent: purple
+    - scheme: slate
+      primary: teal
+      accent: purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to dark mode
+
+nav:
+  - Home: README.md
+  - API Reference: API_REFERENCE.md
+  - Contributing: CONTRIBUTING.md
+  - Rust Documentation: rust_docs/rusty_particles/index.html
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - admonition
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/abhirup-roy/rusty_particles/
