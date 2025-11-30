@@ -205,6 +205,9 @@ impl GpuSimulation {
                 fixed: false, // GPU doesn't support fixed particles yet
                 position_residual: glam::Vec3::ZERO,
                 velocity_residual: glam::Vec3::ZERO,
+                angular_velocity: glam::Vec3::ZERO,
+                torque: glam::Vec3::ZERO,
+                angular_velocity_residual: glam::Vec3::ZERO,
             }
         }).collect()
     }

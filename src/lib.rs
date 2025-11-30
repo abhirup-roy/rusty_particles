@@ -156,4 +156,36 @@ impl PySimulation {
         let p = &self.inner.particles[index];
         Ok((p.position.x, p.position.y, p.position.z))
     }
+
+    fn get_particle_velocity(&self, index: usize) -> PyResult<(f32, f32, f32)> {
+        if index >= self.inner.particles.len() {
+            return Err(PyErr::new::<pyo3::exceptions::PyIndexError, _>("Particle index out of bounds"));
+        }
+        let p = &self.inner.particles[index];
+        Ok((p.velocity.x, p.velocity.y, p.velocity.z))
+    }
+
+    fn get_particle_angular_velocity(&self, index: usize) -> PyResult<(f32, f32, f32)> {
+        if index >= self.inner.particles.len() {
+            return Err(PyErr::new::<pyo3::exceptions::PyIndexError, _>("Particle index out of bounds"));
+        }
+        let p = &self.inner.particles[index];
+        Ok((p.angular_velocity.x, p.angular_velocity.y, p.angular_velocity.z))
+    }
+
+    fn set_particle_velocity(&mut self, index: usize, x: f32, y: f32, z: f32) -> PyResult<()> {
+        if index >= self.inner.particles.len() {
+            return Err(PyErr::new::<pyo3::exceptions::PyIndexError, _>("Particle index out of bounds"));
+        }
+        self.inner.particles[index].velocity = Vec3::new(x, y, z);
+        Ok(())
+    }
+
+    fn set_particle_angular_velocity(&mut self, index: usize, x: f32, y: f32, z: f32) -> PyResult<()> {
+        if index >= self.inner.particles.len() {
+            return Err(PyErr::new::<pyo3::exceptions::PyIndexError, _>("Particle index out of bounds"));
+        }
+        self.inner.particles[index].angular_velocity = Vec3::new(x, y, z);
+        Ok(())
+    }
 }

@@ -12,6 +12,10 @@ pub struct Particle {
     // Kahan summation residuals
     pub position_residual: Vec3,
     pub velocity_residual: Vec3,
+    // Rotation
+    pub angular_velocity: Vec3,
+    pub torque: Vec3,
+    pub angular_velocity_residual: Vec3,
 }
 
 impl Particle {
@@ -26,6 +30,9 @@ impl Particle {
             fixed,
             position_residual: Vec3::ZERO,
             velocity_residual: Vec3::ZERO,
+            angular_velocity: Vec3::ZERO,
+            torque: Vec3::ZERO,
+            angular_velocity_residual: Vec3::ZERO,
         }
     }
 
@@ -75,6 +82,9 @@ impl From<MpiParticle> for Particle {
             fixed: p.fixed,
             position_residual: Vec3::ZERO,
             velocity_residual: Vec3::ZERO,
+            angular_velocity: Vec3::ZERO, // MPI does not sync rotation yet? Or should it?
+            torque: Vec3::ZERO,
+            angular_velocity_residual: Vec3::ZERO,
         }
     }
 }
