@@ -4,6 +4,9 @@ build:
   os: ubuntu-22.04
   apt_packages:
     - libopenmpi-dev
+    - build-essential
+    - clang
+    - libclang-dev
   tools:
     python: "3.10"
     rust: "1.91"
