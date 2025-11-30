@@ -1,5 +1,4 @@
 use glam::Vec3;
-use crate::material::{Material, effective_radius, effective_mass, effective_youngs_modulus, shear_modulus};
 use crate::contact::Contact;
 
 #[derive(Clone, Copy, Debug)]

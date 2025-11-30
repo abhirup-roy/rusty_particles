@@ -12,6 +12,12 @@ anyhow = "1.0"
 fastrand = "2.0"
 stl_io = "0.7"
 pyo3 = { version = "0.20", features = ["extension-module"] }
+dashmap = "5.5"
+wgpu = "0.19"
+bytemuck = { version = "1.14", features = ["derive"] }
+pollster = "0.3"
+futures-intrusive = "0.5"
+mpi = { version = "0.8", default-features = false, features = ["derive"] }
 
 [lib]
 name = "rusty_particles"

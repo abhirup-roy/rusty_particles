@@ -202,6 +202,9 @@ impl GpuSimulation {
                 acceleration: glam::Vec3::from_array(gp.acceleration),
                 radius: gp.radius,
                 mass: gp.mass,
+                fixed: false, // GPU doesn't support fixed particles yet
+                position_residual: glam::Vec3::ZERO,
+                velocity_residual: glam::Vec3::ZERO,
             }
         }).collect()
     }
