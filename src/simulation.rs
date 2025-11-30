@@ -103,7 +103,7 @@ impl Simulation {
         }
     }
 
-    pub fn enable_gpu(&mut self) {
+    pub fn enable_gpu(&mut self) -> Result<(), String> {
         // Initialize GPU simulation
         // This requires async, but we are in sync context.
         // We use pollster to block.
@@ -117,8 +117,9 @@ impl Simulation {
             self.wall_material,
             self.normal_model,
             self.tangential_model,
-        ));
+        ))?;
         self.gpu_sim = Some(gpu_sim);
+        Ok(())
     }
 
     pub fn step(&mut self) {
