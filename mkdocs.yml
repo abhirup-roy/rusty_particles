@@ -22,7 +22,7 @@ theme:
         name: Switch to dark mode
 
 nav:
-  - Home: README.md
+  - Home: index.md
   - API Reference: API_REFERENCE.md
   - Contributing: CONTRIBUTING.md
   - Rust Documentation: rust_docs/rusty_particles/index.html

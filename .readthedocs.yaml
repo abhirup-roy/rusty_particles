@@ -4,8 +4,13 @@ build:
   os: ubuntu-22.04
   tools:
     python: "3.10"
-    rust: "1.75"
+    rust: "stable"
   jobs:
+    post_create_environment:
+      # Copy documentation files to docs/ directory for MkDocs
+      - cp README.md docs/index.md
+      - cp API_REFERENCE.md docs/API_REFERENCE.md
+      - cp CONTRIBUTING.md docs/CONTRIBUTING.md
     post_build:
       # Build Rust documentation
       - cargo doc --no-deps --target-dir target/doc
