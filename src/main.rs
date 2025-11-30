@@ -53,7 +53,7 @@ fn main() {
         let y = rng.f32() * 3.0 + 1.0;
         let radius = 0.02 + rng.f32() * 0.01; 
         let mass = 1.0; 
-        sim.add_particle(Vec3::new(x, y, z), radius, mass);
+        sim.add_particle(Vec3::new(x, y, z), radius, mass, false);
     }
 
     // Create output directory

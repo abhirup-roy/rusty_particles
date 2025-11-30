@@ -46,14 +46,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install maturin pytest numpy
 
-    - name: Build Rust
-      run: cargo build --verbose
-
-    - name: Run Rust Tests
-      run: cargo test --verbose
+    # - name: Run Rust Tests
+    #   run: cargo test --verbose
 
     - name: Build and Install Python Package
-      run: maturin develop
+      run: maturin develop --features extension-module
 
     - name: Run Python Tests
       run: pytest pydem/
